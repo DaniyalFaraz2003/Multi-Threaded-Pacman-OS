@@ -28,7 +28,6 @@ const int FRAME = 16000;
 // Mutex for thread synchronization
 
 
-/*
 std::array<std::string, MAZE_HEIGHT> mazeMapping = {
 		" ################### ",
 		" #........#........# ",
@@ -39,7 +38,7 @@ std::array<std::string, MAZE_HEIGHT> mazeMapping = {
 		" ####.### # ###.#### ",
 		"    #.#   0   #.#    ",
 		"#####.# ##=## #.#####",
-		"     .  #123#  .     ",
+		"     .  #   #  .     ",
 		"#####.# ##### #.#####",
 		"    #.#       #.#    ",
 		" ####.# ##### #.#### ",
@@ -52,31 +51,7 @@ std::array<std::string, MAZE_HEIGHT> mazeMapping = {
 		" #.................# ",
 		" ################### "
 	};
-*/
 
-std::array<std::string, MAZE_HEIGHT> mazeMapping = {
-		" ################### ",
-		" #.................# ",
-		" #o...............o# ",
-		" #.................# ",
-		" #.##.#.#####.#.##.# ",
-		" #....#...#...#....# ",
-		" ####.### # ###.#### ",
-		"    #.#   0   #.#    ",
-		"#####.# ##=## #.#####",
-		"     .  #123#  .     ",
-		"#####.# ##### #.#####",
-		"    #.#       #.#    ",
-		" ####.# ##### #.#### ",
-		" #........#........# ",
-		" #.##..............# ",
-		" #o.#.....P........# ",
-		" ##.#..............# ",
-		" #.................# ",
-		" #.######.#.######.# ",
-		" #.................# ",
-		" ################### "
-	};
 
 std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH> maze;
 
@@ -140,6 +115,8 @@ bool map_collision(bool i_collect_pellets, bool i_use_door, short i_x, short i_y
 			}
 			else //Here we only care about the collectables.
 			{
+                // here we are updating the maze which is the shared resource so we lock
+                pthread_mutex_lock(&mutex);
 				if (Tile::Energizer == maze[x][y])
 				{
 					output = 1;
@@ -150,6 +127,7 @@ bool map_collision(bool i_collect_pellets, bool i_use_door, short i_x, short i_y
 				{
 					maze[x][y] = Tile::Empty;
 				}
+                pthread_mutex_unlock(&mutex);
 			}
 		}
 	}
@@ -220,13 +198,9 @@ public:
         {
             pos.x = PACMAN_SPEED - TILE_SIZE;
         }
-        // Check collision with food pellets and removing them
-        int cell_x = static_cast<int>(pos.x) / TILE_SIZE;
-        int cell_y = static_cast<int>(pos.y) / TILE_SIZE;
 
-         if (maze[cell_x][cell_y] == Tile::Pellet || maze[cell_x][cell_y] == Tile::Energizer) {
-        maze[cell_x][cell_y] = Tile::Empty;
-        }
+        // Check collision with food pellets and removing them
+        map_collision(1, 0, pos.x, pos.y, maze);
 
     }
 
@@ -276,7 +250,42 @@ public:
 } pacman;
 
 
-std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH> getMaze(const std::array<std::string, MAZE_HEIGHT>& i_map_sketch/*, std::array<Position, 4>& i_ghost_positions, */, Pacman& pacman)
+class Ghost: public Pacman {
+    int id;
+public:
+    Ghost(int id) {
+        this->id = id;
+        setPosition(-100, -100);
+    }
+    void draw(RenderWindow& window) {
+        CircleShape ghostHead(TILE_SIZE / 2);
+        RectangleShape ghostBody(Vector2f(TILE_SIZE, TILE_SIZE / 2));
+        ghostHead.setFillColor(Color(255, 0, 0));
+        ghostBody.setFillColor(Color(255, 0, 0));
+
+        ghostHead.setPosition(getPostition().x, getPostition().y);
+        ghostBody.setPosition(getPostition().x, getPostition().y + TILE_SIZE / 2);
+
+        window.draw(ghostHead);
+        window.draw(ghostBody);
+    }
+};
+
+class GhostManager {
+    public:
+    vector<Ghost> ghosts;
+        GhostManager() {
+            ghosts = {Ghost(0), Ghost(1), Ghost(2), Ghost(3)};
+        }
+
+        void draw(RenderWindow& window) {
+            for (Ghost& ghost: ghosts) {
+                ghost.draw(window);
+            }
+        }
+} ghostManager;
+
+std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH> getMaze(const std::array<std::string, MAZE_HEIGHT>& i_map_sketch, std::vector<Ghost>& ghosts, Pacman& pacman)
 {
 	//Is it okay if I put {} here? I feel like I'm doing something illegal.
 	//But if I don't put it there, Visual Studio keeps saying "lOcAl vArIaBlE Is nOt iNiTiAlIzEd".
@@ -311,14 +320,12 @@ std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH> getMaze(const std::array<s
 					break;
 				}
 				//Red ghost
-                /*
 				case '0':
 				{
-					i_ghost_positions[0].x = TILE_SIZE * b;
-					i_ghost_positions[0].y = TILE_SIZE * a;
-
+					ghosts[0].setPosition(TILE_SIZE * b, TILE_SIZE * a);
 					break;
 				}
+                /*
 				//Pink ghost
 				case '1':
 				{
@@ -386,7 +393,7 @@ void drawMap(std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH>& maze, Render
 
 
 // Game Engine Thread Function
-void* gameEngineThread(void*) {
+void* userInterfaceThread(void*) {
     // Game initialization
     // Define the maze layout
     
@@ -417,24 +424,6 @@ void* gameEngineThread(void*) {
     return nullptr;
 }
 
-// User Interface Thread Function
-void* userInterfaceThread(void*) {
-    // UI initialization
-
-    // UI loop
-    while (true) {
-        // UI logic
-        
-        
-        // Rendering
-
-        // Sleep or yield to give time to other threads
-        // For simplicity, you can use usleep or sleep in POSIX systems
-        // usleep(10000); // Sleep for 10 milliseconds
-    }
-
-    return nullptr;
-}
 
 // Ghost Controller Thread Function
 void* ghostControllerThread(void* arg) {
@@ -467,10 +456,6 @@ int main() {
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 
-    // Create game engine thread
-    pthread_t gameEngineThreadID;
-    pthread_create(&gameEngineThreadID, &attr, gameEngineThread, NULL);
-
     // Create user interface thread
     pthread_t userInterfaceThreadID;
     pthread_create(&userInterfaceThreadID, &attr, userInterfaceThread, NULL);
@@ -486,14 +471,13 @@ int main() {
     // Destroy thread attributes
     pthread_attr_destroy(&attr);
 
-    
 
-    maze = getMaze(mazeMapping, pacman);
+    maze = getMaze(mazeMapping, ghostManager.ghosts, pacman);
 
     // Main loop
     Clock clock; float dt; float delay = 0;
     while (window.isOpen()) {
-        dt = clock.getElapsedTime().asMicroseconds();
+        dt = clock.restart().asMicroseconds();
         delay += dt;
 
         while (FRAME <= delay) {
@@ -505,8 +489,6 @@ int main() {
                 }
             }
 
-
-            // i think this input getting part is wrong but for testing sake
             if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up)) {
                 pacman.changeDirection('u');
             } else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down)) {
@@ -516,16 +498,14 @@ int main() {
             } else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) {
                 pacman.changeDirection('r');
             }
-            // end of wrong part
 
             if (FRAME > delay) {
                 // Rendering
                 window.clear(sf::Color::Black);
 
                 drawMap(maze, window);
+                ghostManager.draw(window);
                 pacman.draw(window);
-
-                
 
                 // Render game objects
                 // Render UI
