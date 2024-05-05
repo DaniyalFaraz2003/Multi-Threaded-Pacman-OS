@@ -2,6 +2,7 @@
 #include <pthread.h>
 #include <iostream>
 #include <vector>
+#include <ncurses.h>
 
 #include "globals.hpp"
 
@@ -9,17 +10,86 @@ using namespace std;
 using namespace sf;
 
 // Constants
+pthread_mutex_t mutex;
+
 const int MAZE_WIDTH = 21;
 const int MAZE_HEIGHT = 21;
 const int SCREEN_SIZE_FACTOR = 2;
 const int TILE_SIZE = 30;
 const int WINDOW_WIDTH = TILE_SIZE * MAZE_WIDTH;
 const int WINDOW_HEIGHT = TILE_SIZE * MAZE_HEIGHT;
+const int PACMAN_SPEED = 2;
 
 const int FRAME = 16000;
-// Mutex for thread synchronization
-pthread_mutex_t mutex;
 
+class Pacman {
+    Position pos;
+    char direction;
+public:
+    void draw(RenderWindow& window) {
+        CircleShape pacman(TILE_SIZE / 2);
+        pacman.setFillColor(Color(255, 255, 0));
+        pacman.setPosition(pos.x, pos.y);
+
+        window.draw(pacman);
+    }
+
+    Position getPostition() {
+        return pos;
+    }
+
+    void setPosition(int x, int y) {
+        pos = {x, y};
+    }
+
+    void update() {
+        switch (direction)
+        {
+        case 'u':
+            pos.y -= PACMAN_SPEED;
+            break;
+        case 'd':
+            pos.y += PACMAN_SPEED;
+            break;
+        case 'l':
+            pos.x -= PACMAN_SPEED;
+            break;
+        case 'r':
+            pos.x += PACMAN_SPEED;
+            break;
+        
+        default:
+            break;
+        }
+    }
+
+    void changeDirection(char newDirection) {
+        // Lock mutex before changing Pacman's direction
+        pthread_mutex_lock(&mutex);
+
+        direction = newDirection;
+
+        // Unlock mutex after changing Pacman's direction
+        pthread_mutex_unlock(&mutex);
+    }
+} pacman;
+// Mutex for thread synchronization
+
+int readkey() {
+    int ch;
+
+    initscr();
+    cbreak(); 
+    noecho(); 
+    keypad(stdscr, true);
+    ch = getch();
+
+    endwin();
+
+    return ch;
+}
+
+/*
 std::array<std::string, MAZE_HEIGHT> mazeMapping = {
 		" ################### ",
 		" #........#........# ",
@@ -43,8 +113,33 @@ std::array<std::string, MAZE_HEIGHT> mazeMapping = {
 		" #.................# ",
 		" ################### "
 	};
+*/
 
-std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH> getMaze(const std::array<std::string, MAZE_HEIGHT>& i_map_sketch/*, std::array<Position, 4>& i_ghost_positions, *//*Pacman& i_pacman*/)
+std::array<std::string, MAZE_HEIGHT> mazeMapping = {
+		" ################### ",
+		" #.................# ",
+		" #o...............o# ",
+		" #.................# ",
+		" #.##.#.#####.#.##.# ",
+		" #....#...#...#....# ",
+		" ####.### # ###.#### ",
+		"    #.#   0   #.#    ",
+		"#####.# ##=## #.#####",
+		"     .  #123#  .     ",
+		"#####.# ##### #.#####",
+		"    #.#       #.#    ",
+		" ####.# ##### #.#### ",
+		" #........#........# ",
+		" #.##..............# ",
+		" #o.#.....P........# ",
+		" ##.#..............# ",
+		" #.................# ",
+		" #.######.#.######.# ",
+		" #.................# ",
+		" ################### "
+	};
+
+std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH> getMaze(const std::array<std::string, MAZE_HEIGHT>& i_map_sketch/*, std::array<Position, 4>& i_ghost_positions, */, Pacman& pacman)
 {
 	//Is it okay if I put {} here? I feel like I'm doing something illegal.
 	//But if I don't put it there, Visual Studio keeps saying "lOcAl vArIaBlE Is nOt iNiTiAlIzEd".
@@ -112,14 +207,12 @@ std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH> getMaze(const std::array<s
 					break;
 				}
                 */
-				/*//Pacman!
+				//Pacman!
 				case 'P':
 				{
-					i_pacman.set_position(TILE_SIZE * b, TILE_SIZE * a);
-
+					pacman.setPosition(TILE_SIZE * b, TILE_SIZE * a);
 					break;
 				}
-                */
 				//This looks like a surprised face.
 				case 'o':
 				{
@@ -131,6 +224,8 @@ std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH> getMaze(const std::array<s
 
 	return output_map;
 }
+
+
 
 void drawMap(std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH>& maze, RenderWindow& window) {
     RectangleShape tile(Vector2f(TILE_SIZE, TILE_SIZE));
@@ -152,9 +247,22 @@ void* gameEngineThread(void*) {
     // Define the maze layout
     
     // Game loop
+    Clock clock;
+    int accumulatedTime = 0;
     while (true) {
-        // Game logic
+        // Calculate elapsed time since the last update
+        int dt = clock.restart().asMicroseconds();
+        accumulatedTime += dt;
 
+        // Update game logic based on the fixed timestep
+        while (accumulatedTime >= FRAME) {
+            // Game logic
+            pacman.update();
+
+            // Subtract the fixed timestep from accumulated time
+            accumulatedTime -= FRAME;
+        }
+        
         // Rendering
 
         // Sleep or yield to give time to other threads
@@ -172,7 +280,8 @@ void* userInterfaceThread(void*) {
     // UI loop
     while (true) {
         // UI logic
-
+        
+        
         // Rendering
 
         // Sleep or yield to give time to other threads
@@ -233,8 +342,10 @@ int main() {
     // Destroy thread attributes
     pthread_attr_destroy(&attr);
 
+    
+
     std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH> maze;
-    maze = getMaze(mazeMapping);
+    maze = getMaze(mazeMapping, pacman);
 
     // Main loop
     Clock clock; float dt; float delay = 0;
@@ -251,11 +362,26 @@ int main() {
                 }
             }
 
+
+            // i think this input getting part is wrong but for testing sake
+            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up)) {
+                pacman.changeDirection('u');
+            } else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down)) {
+                pacman.changeDirection('d');
+            } else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Left)) {
+                pacman.changeDirection('l');
+            } else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) {
+                pacman.changeDirection('r');
+            }
+            // end of wrong part
+
             if (FRAME > delay) {
                 // Rendering
                 window.clear(sf::Color::Black);
 
                 drawMap(maze, window);
+                pacman.draw(window);
+
                 
 
                 // Render game objects
