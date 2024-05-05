@@ -220,6 +220,13 @@ public:
         {
             pos.x = PACMAN_SPEED - TILE_SIZE;
         }
+        // Check collision with food pellets and removing them
+        int cell_x = static_cast<int>(pos.x) / TILE_SIZE;
+        int cell_y = static_cast<int>(pos.y) / TILE_SIZE;
+
+         if (maze[cell_x][cell_y] == Tile::Pellet || maze[cell_x][cell_y] == Tile::Energizer) {
+        maze[cell_x][cell_y] = Tile::Empty;
+        }
 
     }
 
@@ -366,6 +373,12 @@ void drawMap(std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH>& maze, Render
             if (maze[i][j] == Tile::Wall) {
                 tile.setFillColor(Color(128, 128, 128));
                 window.draw(tile);
+            }
+            else if (maze[i][j] == Tile::Pellet) {
+                CircleShape pellet(TILE_SIZE / 10);
+                pellet.setFillColor(Color::White);
+                pellet.setPosition(TILE_SIZE * i + TILE_SIZE / 2 - pellet.getRadius(), TILE_SIZE * j + TILE_SIZE / 2 - pellet.getRadius());
+                window.draw(pellet);
             }
         }
     }
