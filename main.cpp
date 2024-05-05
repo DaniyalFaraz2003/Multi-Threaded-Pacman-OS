@@ -7,11 +7,14 @@ using namespace std;
 using namespace sf;
 
 // Constants
-const int WINDOW_WIDTH = 800;
-const int WINDOW_HEIGHT = 600;
-const int MAZE_WIDTH = 600;
-const int MAZE_HEIGHT = 400;
+const int MAZE_WIDTH = 21;
+const int MAZE_HEIGHT = 21;
+const int TILE_SIZE = 15;
+const int SCREEN_SIZE_FACTOR = 2;
+const int WINDOW_WIDTH = TILE_SIZE * MAZE_WIDTH * SCREEN_SIZE_FACTOR;
+const int WINDOW_HEIGHT = TILE_SIZE * MAZE_HEIGHT * SCREEN_SIZE_FACTOR;
 
+const int FRAME = 16000;
 // Mutex for thread synchronization
 pthread_mutex_t mutex;
 
@@ -127,33 +130,29 @@ int main() {
     pthread_attr_destroy(&attr);
 
     // Main loop
+    Clock clock; float dt; float delay = 0;
     while (window.isOpen()) {
-        sf::Event event;
-        while (window.pollEvent(event)) {
-            if (event.type == sf::Event::Closed) {
-                window.close();
-            }
-        }
+        dt = clock.getElapsedTime().asMicroseconds();
+        delay += dt;
 
-        // Rendering
-        window.clear(sf::Color::Black);
-
-        // Render maze
-        sf::RectangleShape wall(sf::Vector2f(20, 20));
-        wall.setFillColor(sf::Color::Blue);
-        for (int i = 0; i <= MAZE_HEIGHT / 20; ++i) {
-            for (int j = 0; j < MAZE_WIDTH / 20; ++j) {
-                if (maze[i][j] == '#') {
-                    wall.setPosition(j * 20, i * 20);
-                    wall.move(WINDOW_WIDTH / 4, WINDOW_HEIGHT / 6);
-                    window.draw(wall);
+        while (FRAME <= delay) {
+            delay -= FRAME;
+            sf::Event event;
+            while (window.pollEvent(event)) {
+                if (event.type == sf::Event::Closed) {
+                    window.close();
                 }
             }
-        }
 
-        // Render game objects
-        // Render UI
-        window.display();
+            // Rendering
+            window.clear(sf::Color::Black);
+
+            
+
+            // Render game objects
+            // Render UI
+            window.display();
+        }
     }
 
     // Joining detached threads is unnecessary and will be ignored
@@ -163,3 +162,5 @@ int main() {
 
     return 0;
 }
+
+
