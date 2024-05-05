@@ -221,12 +221,7 @@ public:
             pos.x = PACMAN_SPEED - TILE_SIZE;
         }
         // Check collision with food pellets and removing them
-        int cell_x = static_cast<int>(pos.x) / TILE_SIZE;
-        int cell_y = static_cast<int>(pos.y) / TILE_SIZE;
-
-         if (maze[cell_x][cell_y] == Tile::Pellet || maze[cell_x][cell_y] == Tile::Energizer) {
-        maze[cell_x][cell_y] = Tile::Empty;
-        }
+        map_collision(1, 0, pos.x, pos.y, maze);
 
     }
 
