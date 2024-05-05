@@ -21,6 +21,7 @@ const int TILE_SIZE = 30;
 const int WINDOW_WIDTH = TILE_SIZE * MAZE_WIDTH;
 const int WINDOW_HEIGHT = TILE_SIZE * MAZE_HEIGHT;
 const int PACMAN_SPEED = 2;
+const int GHOST_SPEED = 2;
 
 const int FRAME = 16000;
 
@@ -38,9 +39,9 @@ std::array<std::string, MAZE_HEIGHT> mazeMapping = {
 		" ####.### # ###.#### ",
 		"    #.#   0   #.#    ",
 		"#####.# ##=## #.#####",
-		"     .  #   #  .     ",
+		"     . 1#   #2 .     ",
 		"#####.# ##### #.#####",
-		"    #.#       #.#    ",
+		"    #.#   3   #.#    ",
 		" ####.# ##### #.#### ",
 		" #........#........# ",
 		" #.##.###.#.###.##.# ",
@@ -136,6 +137,7 @@ bool map_collision(bool i_collect_pellets, bool i_use_door, short i_x, short i_y
 }
 
 class Pacman {
+protected:
     Position pos;
     char direction = 'r';
 public:
@@ -252,6 +254,13 @@ public:
 
 class Ghost: public Pacman {
     int id;
+    bool movement_mode;
+    
+    Position home;
+	//You can't stay in your house forever (sadly).
+	Position home_exit;
+	//Current target.
+	Position target;
 public:
     Ghost(int id) {
         this->id = id;
@@ -260,14 +269,110 @@ public:
     void draw(RenderWindow& window) {
         CircleShape ghostHead(TILE_SIZE / 2);
         RectangleShape ghostBody(Vector2f(TILE_SIZE, TILE_SIZE / 2));
-        ghostHead.setFillColor(Color(255, 0, 0));
-        ghostBody.setFillColor(Color(255, 0, 0));
+        
+        switch (id)
+        {
+        case 0:
+            ghostHead.setFillColor(Color(255, 0, 0));
+            ghostBody.setFillColor(Color(255, 0, 0));
+            break;
+        case 1:
+            ghostHead.setFillColor(Color(0, 255, 255));
+            ghostBody.setFillColor(Color(0, 255, 255));
+            break;
+        case 2:
+            ghostHead.setFillColor(Color(0, 255, 0));
+            ghostBody.setFillColor(Color(0, 255, 0));
+            break;
+        case 3:
+            ghostHead.setFillColor(Color(255, 0, 255));
+            ghostBody.setFillColor(Color(255, 0, 255));
+            break;
+        default:
+            break;
+        }
 
-        ghostHead.setPosition(getPostition().x, getPostition().y);
-        ghostBody.setPosition(getPostition().x, getPostition().y + TILE_SIZE / 2);
+        ghostHead.setPosition(pos.x, pos.y);
+        ghostBody.setPosition(pos.x, pos.y + TILE_SIZE / 2);
 
         window.draw(ghostHead);
         window.draw(ghostBody);
+    }
+    
+    void update(std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH>& maze) {
+        int availableWays = 0;
+
+        std::array<bool, 4> walls;
+        walls[0] = map_collision(0, 0, GHOST_SPEED + pos.x, pos.y, maze);
+        walls[1] = map_collision(0, 0, pos.x, pos.y - GHOST_SPEED, maze);
+        walls[2] = map_collision(0, 0, pos.x - GHOST_SPEED, pos.y, maze);
+        walls[3] = map_collision(0, 0, pos.x, GHOST_SPEED + pos.y, maze);
+
+        int dir;
+        if (direction == 'r') dir = 0;
+        else if (direction == 'u') dir = 1;
+        else if (direction == 'l') dir = 2;
+        else if (direction == 'd') dir = 3;
+
+        for (int i = 0; i < 4; i++) {
+            if (i == (dir + 2) % 4) {
+                continue;
+            }
+            else if (walls[i] == 0) {
+                availableWays++;
+            }
+        }
+
+        if (availableWays > 1) {
+            int newDir = rand() % 4;
+            if (walls[newDir] == 0 && newDir != (2 + direction) % 4) {
+                if (newDir == 0) direction = 'r';
+                else if (newDir == 1) direction = 'u';
+                else if (newDir == 2) direction = 'l';
+                else if (newDir == 3) direction = 'd';
+            }
+        }
+        else if (walls[dir] == 1) {
+            for (int i = 0; i < 4; i++) {
+                if (walls[i] == 0 && i != (2 + dir) % 4) {
+                    if (i == 0) direction = 'r';
+                    else if (i == 1) direction = 'u';
+                    else if (i == 2) direction = 'l';
+                    else if (i == 3) direction = 'd';
+                }
+            }
+        }
+
+        if (walls[dir] == 0) {
+            switch (direction)
+            {
+            case 'u':
+                pos.y -= GHOST_SPEED;
+                break;
+            case 'd':
+                pos.y += GHOST_SPEED;
+                break;
+            case 'l':
+                pos.x -= GHOST_SPEED;
+                break;
+            case 'r':
+                pos.x += GHOST_SPEED;
+                break;
+            
+            default:
+                break;
+            }
+        }
+
+        if (-TILE_SIZE >= pos.x)
+        {
+            pos.x = TILE_SIZE * MAZE_WIDTH - GHOST_SPEED;
+        }
+        else if (TILE_SIZE * MAZE_WIDTH <= pos.x)
+        {
+            pos.x = GHOST_SPEED - TILE_SIZE;
+        }
+
     }
 };
 
@@ -283,6 +388,7 @@ class GhostManager {
                 ghost.draw(window);
             }
         }
+
 } ghostManager;
 
 std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH> getMaze(const std::array<std::string, MAZE_HEIGHT>& i_map_sketch, std::vector<Ghost>& ghosts, Pacman& pacman)
@@ -325,32 +431,27 @@ std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH> getMaze(const std::array<s
 					ghosts[0].setPosition(TILE_SIZE * b, TILE_SIZE * a);
 					break;
 				}
-                /*
 				//Pink ghost
 				case '1':
 				{
-					i_ghost_positions[1].x = TILE_SIZE * b;
-					i_ghost_positions[1].y = TILE_SIZE * a;
+					ghosts[1].setPosition(TILE_SIZE * b, TILE_SIZE * a);
 
 					break;
 				}
 				//Blue (cyan) ghost
 				case '2':
 				{
-					i_ghost_positions[2].x = TILE_SIZE * b;
-					i_ghost_positions[2].y = TILE_SIZE * a;
+					ghosts[2].setPosition(TILE_SIZE * b, TILE_SIZE * a);
 
 					break;
 				}
 				//Orange ghost
 				case '3':
 				{
-					i_ghost_positions[3].x = TILE_SIZE * b;
-					i_ghost_positions[3].y = TILE_SIZE * a;
+					ghosts[3].setPosition(TILE_SIZE * b, TILE_SIZE * a);
 
 					break;
 				}
-                */
 				//Pacman!
 				case 'P':
 				{
@@ -430,11 +531,26 @@ void* ghostControllerThread(void* arg) {
     int ghostId = *((int*)arg);
     // Ghost initialization
 
-    // Ghost loop
+    Clock clock;
+    int accumulatedTime = 0;
     while (true) {
-        // Ghost logic
+        // Calculate elapsed time since the last update
+        int dt = clock.restart().asMicroseconds();
+        accumulatedTime += dt;
 
-        // Movement algorithm
+        // Update game logic based on the fixed timestep
+        while (accumulatedTime >= FRAME) {
+            
+            
+            // Game logic
+            ghostManager.ghosts[ghostId].update(maze);
+            
+
+            // Subtract the fixed timestep from accumulated time
+            accumulatedTime -= FRAME;
+        }
+        
+        // Rendering
 
         // Sleep or yield to give time to other threads
         // For simplicity, you can use usleep or sleep in POSIX systems
@@ -445,6 +561,7 @@ void* ghostControllerThread(void* arg) {
 }
 
 int main() {
+    srand(time(NULL));
     // Initialize mutex
     pthread_mutex_init(&mutex, NULL);
 
@@ -460,12 +577,11 @@ int main() {
     pthread_t userInterfaceThreadID;
     pthread_create(&userInterfaceThreadID, &attr, userInterfaceThread, NULL);
 
+    pthread_t ghostThreads[4];
     // Create ghost controller threads
-    std::vector<pthread_t> ghostThreads;
     for (int i = 0; i < 4; ++i) {
-        pthread_t ghostThread;
-        pthread_create(&ghostThread, &attr, ghostControllerThread, &i);
-        ghostThreads.push_back(ghostThread);
+        int* id = new int(i);
+        pthread_create(&ghostThreads[i], &attr, ghostControllerThread, id);
     }
 
     // Destroy thread attributes
