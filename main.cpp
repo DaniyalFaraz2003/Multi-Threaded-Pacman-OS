@@ -1,8 +1,9 @@
 #include <SFML/Graphics.hpp>
 #include <pthread.h>
+#include <cmath>
+#include <array>
 #include <iostream>
 #include <vector>
-#include <ncurses.h>
 
 #include "globals.hpp"
 
@@ -11,6 +12,7 @@ using namespace sf;
 
 // Constants
 pthread_mutex_t mutex;
+
 
 const int MAZE_WIDTH = 21;
 const int MAZE_HEIGHT = 21;
@@ -22,72 +24,9 @@ const int PACMAN_SPEED = 2;
 
 const int FRAME = 16000;
 
-class Pacman {
-    Position pos;
-    char direction;
-public:
-    void draw(RenderWindow& window) {
-        CircleShape pacman(TILE_SIZE / 2);
-        pacman.setFillColor(Color(255, 255, 0));
-        pacman.setPosition(pos.x, pos.y);
 
-        window.draw(pacman);
-    }
-
-    Position getPostition() {
-        return pos;
-    }
-
-    void setPosition(int x, int y) {
-        pos = {x, y};
-    }
-
-    void update() {
-        switch (direction)
-        {
-        case 'u':
-            pos.y -= PACMAN_SPEED;
-            break;
-        case 'd':
-            pos.y += PACMAN_SPEED;
-            break;
-        case 'l':
-            pos.x -= PACMAN_SPEED;
-            break;
-        case 'r':
-            pos.x += PACMAN_SPEED;
-            break;
-        
-        default:
-            break;
-        }
-    }
-
-    void changeDirection(char newDirection) {
-        // Lock mutex before changing Pacman's direction
-        pthread_mutex_lock(&mutex);
-
-        direction = newDirection;
-
-        // Unlock mutex after changing Pacman's direction
-        pthread_mutex_unlock(&mutex);
-    }
-} pacman;
 // Mutex for thread synchronization
 
-int readkey() {
-    int ch;
-
-    initscr();
-    cbreak(); 
-    noecho(); 
-    keypad(stdscr, true);
-    ch = getch();
-
-    endwin();
-
-    return ch;
-}
 
 /*
 std::array<std::string, MAZE_HEIGHT> mazeMapping = {
@@ -138,6 +77,197 @@ std::array<std::string, MAZE_HEIGHT> mazeMapping = {
 		" #.................# ",
 		" ################### "
 	};
+
+std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH> maze;
+
+bool map_collision(bool i_collect_pellets, bool i_use_door, short i_x, short i_y, std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH>& maze)
+{
+	bool output = 0;
+
+	//Getting the exact position.
+	float cell_x = i_x / static_cast<float>(TILE_SIZE);
+	float cell_y = i_y / static_cast<float>(TILE_SIZE);
+
+	//A ghost/Pacman can intersect 4 cells at most.
+	for (unsigned char a = 0; a < 4; a++)
+	{
+		short x = 0;
+		short y = 0;
+
+		switch (a)
+		{
+			case 0: //Top left cell
+			{
+				x = static_cast<short>(floor(cell_x));
+				y = static_cast<short>(floor(cell_y));
+
+				break;
+			}
+			case 1: //Top right cell
+			{
+				x = static_cast<short>(ceil(cell_x));
+				y = static_cast<short>(floor(cell_y));
+
+				break;
+			}
+			case 2: //Bottom left cell
+			{
+				x = static_cast<short>(floor(cell_x));
+				y = static_cast<short>(ceil(cell_y));
+
+				break;
+			}
+			case 3: //Bottom right cell
+			{
+				x = static_cast<short>(ceil(cell_x));
+				y = static_cast<short>(ceil(cell_y));
+			}
+		}
+
+		//Making sure that the position is inside the map.
+		if (0 <= x && 0 <= y && MAZE_HEIGHT > y && MAZE_WIDTH > x)
+		{
+			if (0 == i_collect_pellets) //Here we only care about the walls.
+			{
+				if (Tile::Wall == maze[x][y])
+				{
+					output = 1;
+				}
+				else if (0 == i_use_door && Tile::Door == maze[x][y])
+				{
+					output = 1;
+				}
+			}
+			else //Here we only care about the collectables.
+			{
+				if (Tile::Energizer == maze[x][y])
+				{
+					output = 1;
+
+					maze[x][y] = Tile::Empty;
+				}
+				else if (Tile::Pellet == maze[x][y])
+				{
+					maze[x][y] = Tile::Empty;
+				}
+			}
+		}
+	}
+
+	return output;
+}
+
+class Pacman {
+    Position pos;
+    char direction = 'r';
+public:
+    void draw(RenderWindow& window) {
+        CircleShape pacman(TILE_SIZE / 2);
+        pacman.setFillColor(Color(255, 255, 0));
+        pacman.setPosition(pos.x, pos.y);
+
+        window.draw(pacman);
+    }
+
+    Position getPostition() {
+        return pos;
+    }
+
+    void setPosition(int x, int y) {
+        pos = {x, y};
+    }
+
+    void update(std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH>& maze) {
+
+        std::array<bool, 4> walls;
+        walls[0] = map_collision(0, 0, PACMAN_SPEED + pos.x, pos.y, maze);
+        walls[1] = map_collision(0, 0, pos.x, pos.y - PACMAN_SPEED, maze);
+        walls[2] = map_collision(0, 0, pos.x - PACMAN_SPEED, pos.y, maze);
+        walls[3] = map_collision(0, 0, pos.x, PACMAN_SPEED + pos.y, maze);
+
+        int dir;
+        if (direction == 'r') dir = 0;
+        else if (direction == 'u') dir = 1;
+        else if (direction == 'l') dir = 2;
+        else if (direction == 'd') dir = 3;
+
+        if (walls[dir] == 0) {
+            switch (direction)
+            {
+            case 'u':
+                pos.y -= PACMAN_SPEED;
+                break;
+            case 'd':
+                pos.y += PACMAN_SPEED;
+                break;
+            case 'l':
+                pos.x -= PACMAN_SPEED;
+                break;
+            case 'r':
+                pos.x += PACMAN_SPEED;
+                break;
+            
+            default:
+                break;
+            }
+        }
+
+        if (-TILE_SIZE >= pos.x)
+        {
+            pos.x = TILE_SIZE * MAZE_WIDTH - PACMAN_SPEED;
+        }
+        else if (TILE_SIZE * MAZE_WIDTH <= pos.x)
+        {
+            pos.x = PACMAN_SPEED - TILE_SIZE;
+        }
+
+    }
+
+    void changeDirection(char newDirection) {
+        // Lock mutex before changing Pacman's direction
+
+        std::array<bool, 4> walls;
+        walls[0] = map_collision(0, 0, PACMAN_SPEED + pos.x, pos.y, maze);
+        walls[1] = map_collision(0, 0, pos.x, pos.y - PACMAN_SPEED, maze);
+        walls[2] = map_collision(0, 0, pos.x - PACMAN_SPEED, pos.y, maze);
+        walls[3] = map_collision(0, 0, pos.x, PACMAN_SPEED + pos.y, maze);
+
+        if (newDirection == 'r')
+        {
+            if (0 == walls[0]) //You can't turn in this direction if there's a wall there.
+            {
+                direction = 'r';
+            }
+        }
+
+        if (newDirection == 'u')
+        {
+            if (0 == walls[1])
+            {
+                direction = 'u';
+            }
+        }
+
+        if (newDirection == 'l')
+        {
+            if (0 == walls[2])
+            {
+                direction = 'l';
+            }
+        }
+
+        if (newDirection == 'd')
+        {
+            if (0 == walls[3])
+            {
+                direction = 'd';
+            }
+        }
+
+        // Unlock mutex after changing Pacman's direction
+    }
+} pacman;
+
 
 std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH> getMaze(const std::array<std::string, MAZE_HEIGHT>& i_map_sketch/*, std::array<Position, 4>& i_ghost_positions, */, Pacman& pacman)
 {
@@ -241,6 +371,7 @@ void drawMap(std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH>& maze, Render
     }
 }
 
+
 // Game Engine Thread Function
 void* gameEngineThread(void*) {
     // Game initialization
@@ -257,7 +388,7 @@ void* gameEngineThread(void*) {
         // Update game logic based on the fixed timestep
         while (accumulatedTime >= FRAME) {
             // Game logic
-            pacman.update();
+            pacman.update(maze);
 
             // Subtract the fixed timestep from accumulated time
             accumulatedTime -= FRAME;
@@ -344,7 +475,6 @@ int main() {
 
     
 
-    std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH> maze;
     maze = getMaze(mazeMapping, pacman);
 
     // Main loop
@@ -398,5 +528,4 @@ int main() {
 
     return 0;
 }
-
 
