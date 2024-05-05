@@ -3,19 +3,24 @@
 #include <iostream>
 #include <vector>
 
+#include "globals.hpp"
+
 using namespace std;
 using namespace sf;
 
 // Constants
-const int WINDOW_WIDTH = 800;
-const int WINDOW_HEIGHT = 600;
-const int MAZE_WIDTH = 600;
-const int MAZE_HEIGHT = 400;
+const int MAZE_WIDTH = 21;
+const int MAZE_HEIGHT = 21;
+const int SCREEN_SIZE_FACTOR = 2;
+const int TILE_SIZE = 30;
+const int WINDOW_WIDTH = TILE_SIZE * MAZE_WIDTH;
+const int WINDOW_HEIGHT = TILE_SIZE * MAZE_HEIGHT;
 
+const int FRAME = 16000;
 // Mutex for thread synchronization
 pthread_mutex_t mutex;
 
-std::array<std::string, MAZE_HEIGHT> maze = {
+std::array<std::string, MAZE_HEIGHT> mazeMapping = {
 		" ################### ",
 		" #........#........# ",
 		" #o##.###.#.###.##o# ",
@@ -38,6 +43,108 @@ std::array<std::string, MAZE_HEIGHT> maze = {
 		" #.................# ",
 		" ################### "
 	};
+
+std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH> getMaze(const std::array<std::string, MAZE_HEIGHT>& i_map_sketch/*, std::array<Position, 4>& i_ghost_positions, *//*Pacman& i_pacman*/)
+{
+	//Is it okay if I put {} here? I feel like I'm doing something illegal.
+	//But if I don't put it there, Visual Studio keeps saying "lOcAl vArIaBlE Is nOt iNiTiAlIzEd".
+	std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH> output_map{};
+
+	for (unsigned char a = 0; a < MAZE_HEIGHT; a++)
+	{
+		for (unsigned char b = 0; b < MAZE_WIDTH; b++)
+		{
+			//By default, every Tile is empty.
+			output_map[b][a] = Tile::Empty;
+
+			switch (i_map_sketch[a][b])
+			{
+				//#wall #obstacle #youcantgothroughme
+				case '#':
+				{
+					output_map[b][a] = Tile::Wall;
+
+					break;
+				}
+				case '=':
+				{
+					output_map[b][a] = Tile::Door;
+
+					break;
+				}
+				case '.':
+				{
+					output_map[b][a] = Tile::Pellet;
+
+					break;
+				}
+				//Red ghost
+                /*
+				case '0':
+				{
+					i_ghost_positions[0].x = TILE_SIZE * b;
+					i_ghost_positions[0].y = TILE_SIZE * a;
+
+					break;
+				}
+				//Pink ghost
+				case '1':
+				{
+					i_ghost_positions[1].x = TILE_SIZE * b;
+					i_ghost_positions[1].y = TILE_SIZE * a;
+
+					break;
+				}
+				//Blue (cyan) ghost
+				case '2':
+				{
+					i_ghost_positions[2].x = TILE_SIZE * b;
+					i_ghost_positions[2].y = TILE_SIZE * a;
+
+					break;
+				}
+				//Orange ghost
+				case '3':
+				{
+					i_ghost_positions[3].x = TILE_SIZE * b;
+					i_ghost_positions[3].y = TILE_SIZE * a;
+
+					break;
+				}
+                */
+				/*//Pacman!
+				case 'P':
+				{
+					i_pacman.set_position(TILE_SIZE * b, TILE_SIZE * a);
+
+					break;
+				}
+                */
+				//This looks like a surprised face.
+				case 'o':
+				{
+					output_map[b][a] = Tile::Energizer;
+				}
+			}
+		}
+	}
+
+	return output_map;
+}
+
+void drawMap(std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH>& maze, RenderWindow& window) {
+    RectangleShape tile(Vector2f(TILE_SIZE, TILE_SIZE));
+
+    for (int i = 0; i < MAZE_WIDTH; i++) {
+        for (int j = 0; j < MAZE_HEIGHT; j++) {
+            tile.setPosition(TILE_SIZE * i, TILE_SIZE * j);
+            if (maze[i][j] == Tile::Wall) {
+                tile.setFillColor(Color(128, 128, 128));
+                window.draw(tile);
+            }
+        }
+    }
+}
 
 // Game Engine Thread Function
 void* gameEngineThread(void*) {
@@ -126,34 +233,36 @@ int main() {
     // Destroy thread attributes
     pthread_attr_destroy(&attr);
 
+    std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH> maze;
+    maze = getMaze(mazeMapping);
+
     // Main loop
+    Clock clock; float dt; float delay = 0;
     while (window.isOpen()) {
-        sf::Event event;
-        while (window.pollEvent(event)) {
-            if (event.type == sf::Event::Closed) {
-                window.close();
-            }
-        }
+        dt = clock.getElapsedTime().asMicroseconds();
+        delay += dt;
 
-        // Rendering
-        window.clear(sf::Color::Black);
-
-        // Render maze
-        sf::RectangleShape wall(sf::Vector2f(20, 20));
-        wall.setFillColor(sf::Color::Blue);
-        for (int i = 0; i <= MAZE_HEIGHT / 20; ++i) {
-            for (int j = 0; j < MAZE_WIDTH / 20; ++j) {
-                if (maze[i][j] == '#') {
-                    wall.setPosition(j * 20, i * 20);
-                    wall.move(WINDOW_WIDTH / 4, WINDOW_HEIGHT / 6);
-                    window.draw(wall);
+        while (FRAME <= delay) {
+            delay -= FRAME;
+            sf::Event event;
+            while (window.pollEvent(event)) {
+                if (event.type == sf::Event::Closed) {
+                    window.close();
                 }
             }
-        }
 
-        // Render game objects
-        // Render UI
-        window.display();
+            if (FRAME > delay) {
+                // Rendering
+                window.clear(sf::Color::Black);
+
+                drawMap(maze, window);
+                
+
+                // Render game objects
+                // Render UI
+                window.display();
+            }
+        }
     }
 
     // Joining detached threads is unnecessary and will be ignored
