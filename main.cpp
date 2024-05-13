@@ -12,18 +12,30 @@ using namespace sf;
 
 // Constants
 pthread_mutex_t mutex;
+pthread_mutex_t mutex1;
 
-
+const int FONT_HEIGHT = 16;
 const int MAZE_WIDTH = 21;
 const int MAZE_HEIGHT = 21;
 const int SCREEN_SIZE_FACTOR = 2;
-const int TILE_SIZE = 30;
+const int TILE_SIZE = 16;
 const int WINDOW_WIDTH = TILE_SIZE * MAZE_WIDTH;
 const int WINDOW_HEIGHT = TILE_SIZE * MAZE_HEIGHT;
 const int PACMAN_SPEED = 2;
 const int GHOST_SPEED = 2;
+const int ENERGIZER_DURATION = 512;
+const int GHOST_FLASH_START = 64;
+const int GHOST_ESCAPE_SPEED = 4;
+const int GHOST_FRIGHTENED_SPEED = 3;
+const int LONG_SCATTER_DURATION = 512;
+const int SHORT_SCATTER_DURATION = 256;
+const int SCREEN_RESIZE = 2;
 
-const int FRAME = 16000;
+const int GHOST_1_CHASE = 2;
+const int GHOST_2_CHASE = 1;
+const int GHOST_3_CHASE = 4;
+
+const int FRAME = 16666;
 
 
 // Mutex for thread synchronization
@@ -39,9 +51,9 @@ std::array<std::string, MAZE_HEIGHT> mazeMapping = {
 		" ####.### # ###.#### ",
 		"    #.#   0   #.#    ",
 		"#####.# ##=## #.#####",
-		"     . 1#   #2 .     ",
+		"     .  #123#  .     ",
 		"#####.# ##### #.#####",
-		"    #.#   3   #.#    ",
+		"    #.#       #.#    ",
 		" ####.# ##### #.#### ",
 		" #........#........# ",
 		" #.##.###.#.###.##.# ",
@@ -140,6 +152,8 @@ class Pacman {
 protected:
     Position pos;
     char direction = 'r';
+    int energizer_timer = 0;
+    bool dead = 0;
 public:
     void draw(RenderWindow& window) {
         CircleShape pacman(TILE_SIZE / 2);
@@ -147,6 +161,12 @@ public:
         pacman.setPosition(pos.x, pos.y);
 
         window.draw(pacman);
+    }
+
+
+
+    char getDirection() {
+        return this->direction;
     }
 
     Position getPostition() {
@@ -159,11 +179,13 @@ public:
 
     void update(std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH>& maze) {
 
+        
         std::array<bool, 4> walls;
         walls[0] = map_collision(0, 0, PACMAN_SPEED + pos.x, pos.y, maze);
         walls[1] = map_collision(0, 0, pos.x, pos.y - PACMAN_SPEED, maze);
         walls[2] = map_collision(0, 0, pos.x - PACMAN_SPEED, pos.y, maze);
         walls[3] = map_collision(0, 0, pos.x, PACMAN_SPEED + pos.y, maze);
+
 
         int dir;
         if (direction == 'r') dir = 0;
@@ -171,6 +193,7 @@ public:
         else if (direction == 'l') dir = 2;
         else if (direction == 'd') dir = 3;
 
+        pthread_mutex_lock(&mutex);
         if (walls[dir] == 0) {
             switch (direction)
             {
@@ -191,7 +214,10 @@ public:
                 break;
             }
         }
+        pthread_mutex_unlock(&mutex);
 
+
+        pthread_mutex_lock(&mutex);
         if (-TILE_SIZE >= pos.x)
         {
             pos.x = TILE_SIZE * MAZE_WIDTH - PACMAN_SPEED;
@@ -200,9 +226,33 @@ public:
         {
             pos.x = PACMAN_SPEED - TILE_SIZE;
         }
-        // Check collision with food pellets and removing them
-        map_collision(1, 0, pos.x, pos.y, maze);
+        pthread_mutex_unlock(&mutex);
 
+        
+        if (1 == map_collision(1, 0, pos.x, pos.y, maze)) //When Pacman eats an energizer...
+        {
+            //He becomes energized!
+            pthread_mutex_lock(&mutex);
+            energizer_timer = ENERGIZER_DURATION;
+            pthread_mutex_unlock(&mutex);
+        }
+        else
+        {
+            pthread_mutex_lock(&mutex);
+            energizer_timer = std::max(0, energizer_timer - 1);
+            pthread_mutex_unlock(&mutex);
+        }
+        
+
+    }
+
+    Position getPosition () {
+        return pos;
+    }
+
+    int get_energizer_timer()
+    {
+        return energizer_timer;
     }
 
     void changeDirection(char newDirection) {
@@ -214,6 +264,7 @@ public:
         walls[2] = map_collision(0, 0, pos.x - PACMAN_SPEED, pos.y, maze);
         walls[3] = map_collision(0, 0, pos.x, PACMAN_SPEED + pos.y, maze);
 
+        pthread_mutex_lock(&mutex);
         if (newDirection == 'r')
         {
             if (0 == walls[0]) //You can't turn in this direction if there's a wall there.
@@ -245,7 +296,7 @@ public:
                 direction = 'd';
             }
         }
-
+        pthread_mutex_unlock(&mutex);
         // Unlock mutex after changing Pacman's direction
     }
 } pacman;
@@ -253,42 +304,264 @@ public:
 
 class Ghost: public Pacman {
     int id;
-    bool movement_mode;
-    
+    char movement_mode; // 's' for scatter and 'c' for chase
+    bool use_door;
     Position home;
 	//You can't stay in your house forever (sadly).
 	Position home_exit;
 	//Current target.
 	Position target;
+    int frightened_mode;
+    int frightened_speed_timer;
+
 public:
     Ghost(int id) {
         this->id = id;
-        setPosition(-100, -100);
+    }
+
+    void update_target(unsigned char i_pacman_direction, const Position& i_ghost_0_position, const Position& i_pacman_position) {
+        if (1 == use_door)
+        {
+            if (pos == target)
+            {
+                if (home_exit == target) 
+                {
+                    use_door = 0; 
+                }
+                else if (home == target) 
+                {
+                    frightened_mode = 0; 
+
+                    target = home_exit; 
+                }
+            }
+        }
+        else
+        {
+            if ('s' == movement_mode)
+            {
+                
+                switch (id)
+                {
+                    case 0:
+                    {
+                        target = {TILE_SIZE * (MAZE_WIDTH - 1), 0};
+
+                        break;
+                    }
+                    case 1:
+                    {
+                        target = {0, 0};
+
+                        break;
+                    }
+                    case 2:
+                    {
+                        target = {TILE_SIZE * (MAZE_WIDTH - 1), TILE_SIZE * (MAZE_HEIGHT - 1)};
+
+                        break;
+                    }
+                    case 3:
+                    {
+                        target = {0, TILE_SIZE * (MAZE_HEIGHT - 1)};
+                    }
+                }
+            }
+            else 
+            {
+                switch (id)
+                {
+                    case 0: 
+                    {
+                        target = i_pacman_position;
+
+                        break;
+                    }
+                    case 1: 
+                    {
+                        target = i_pacman_position;
+
+                        switch (i_pacman_direction)
+                        {
+                            case 0:
+                            {
+                                target.x += TILE_SIZE * GHOST_1_CHASE;
+
+                                break;
+                            }
+                            case 1:
+                            {
+                                target.y -= TILE_SIZE * GHOST_1_CHASE;
+
+                                break;
+                            }
+                            case 2:
+                            {
+                                target.x -= TILE_SIZE * GHOST_1_CHASE;
+
+                                break;
+                            }
+                            case 3:
+                            {
+                                target.y += TILE_SIZE * GHOST_1_CHASE;
+                            }
+                        }
+
+                        break;
+                    }
+                    case 2: 
+                    {
+                        target = i_pacman_position;
+
+                        
+                        switch (i_pacman_direction)
+                        {
+                            case 0:
+                            {
+                                target.x += TILE_SIZE * GHOST_2_CHASE;
+
+                                break;
+                            }
+                            case 1:
+                            {
+                                target.y -= TILE_SIZE * GHOST_2_CHASE;
+
+                                break;
+                            }
+                            case 2:
+                            {
+                                target.x -= TILE_SIZE * GHOST_2_CHASE;
+
+                                break;
+                            }
+                            case 3:
+                            {
+                                target.y += TILE_SIZE * GHOST_2_CHASE;
+                            }
+                        }
+
+                        //We're sending a vector from the red gohst to the second cell in front of Pacman.
+                        //Then we're doubling it.
+                        target.x += target.x - i_ghost_0_position.x;
+                        target.y += target.y - i_ghost_0_position.y;
+
+                        break;
+                    }
+                    case 3: //The orange gohst will chase Pacman until it gets close to him. Then it'll switch to the scatter mode.
+                    {
+                        //Using the Pythagoras' theorem again.
+                        if (TILE_SIZE * GHOST_3_CHASE <= sqrt(pow(pos.x - i_pacman_position.x, 2) + pow(pos.y - i_pacman_position.y, 2)))
+                        {
+                            target = i_pacman_position;
+                        }
+                        else
+                        {
+                            target = {0, TILE_SIZE * (MAZE_HEIGHT - 1)};
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    bool pacman_collision(const Position& i_pacman_position)
+    {
+        if (pos.x > i_pacman_position.x - TILE_SIZE && pos.x < TILE_SIZE + i_pacman_position.x)
+        {
+            if (pos.y > i_pacman_position.y - TILE_SIZE && pos.y < TILE_SIZE + i_pacman_position.y)
+            {
+                return 1;
+            }
+        }
+
+        return 0;
+    }
+
+    void switchMovementMode() {
+        if (movement_mode == 's') {
+            movement_mode = 'c';
+        } else {
+            movement_mode = 's';
+        }
+    }
+
+    void reset(const Position& i_home, const Position& i_home_exit) {
+        
+        movement_mode = 's';
+        use_door = 0 < id;
+        direction = 'r';
+        home = i_home;
+        home_exit = i_home_exit;
+        target = i_home_exit;
+        frightened_mode = 0;
+	    frightened_speed_timer = 0;
+
+    }
+    float getTargetDistance(char dir) {
+        short x = pos.x;
+        short y = pos.y;
+
+        switch (dir)
+        {
+            case 'r':
+            {
+                x += GHOST_SPEED;
+
+                break;
+            }
+            case 'u':
+            {
+                y -= GHOST_SPEED;
+
+                break;
+            }
+            case 'l':
+            {
+                x -= GHOST_SPEED;
+
+                break;
+            }
+            case 'd':
+            {
+                y += GHOST_SPEED;
+            }
+        }
+        return static_cast<float>(sqrt(pow(x - target.x, 2) + pow(y - target.y, 2)));
     }
     void draw(RenderWindow& window) {
         CircleShape ghostHead(TILE_SIZE / 2);
         RectangleShape ghostBody(Vector2f(TILE_SIZE, TILE_SIZE / 2));
         
-        switch (id)
-        {
-        case 0:
-            ghostHead.setFillColor(Color(255, 0, 0));
-            ghostBody.setFillColor(Color(255, 0, 0));
-            break;
-        case 1:
-            ghostHead.setFillColor(Color(0, 255, 255));
-            ghostBody.setFillColor(Color(0, 255, 255));
-            break;
-        case 2:
-            ghostHead.setFillColor(Color(0, 255, 0));
-            ghostBody.setFillColor(Color(0, 255, 0));
-            break;
-        case 3:
-            ghostHead.setFillColor(Color(255, 0, 255));
-            ghostBody.setFillColor(Color(255, 0, 255));
-            break;
-        default:
-            break;
+        if (frightened_mode == 0) {
+            switch (id)
+            {
+            case 0:
+                ghostHead.setFillColor(Color(255, 0, 0));
+                ghostBody.setFillColor(Color(255, 0, 0));
+                break;
+            case 1:
+                ghostHead.setFillColor(Color(255, 192, 203));
+                ghostBody.setFillColor(Color(255, 192, 203));
+                break;
+            case 2:
+                ghostHead.setFillColor(Color(0, 255, 255));
+                ghostBody.setFillColor(Color(0, 255, 255));
+                
+                break;
+            case 3:
+                ghostHead.setFillColor(Color(255, 165, 0));
+                ghostBody.setFillColor(Color(255, 165, 0));
+                break;
+            default:
+                break;
+
+            
+            }
+        }
+        else if (frightened_mode == 1) {
+            ghostHead.setFillColor(Color(50, 76, 168));
+            ghostBody.setFillColor(Color(50, 76, 168));
+
         }
 
         ghostHead.setPosition(pos.x, pos.y);
@@ -298,14 +571,66 @@ public:
         window.draw(ghostBody);
     }
     
-    void update(std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH>& maze) {
+    int convertDirToInt(char dir) {
+        switch (dir)
+        {
+        case 'r':
+            return 0;
+            break;
+        case 'u':
+            return 1;
+            break;
+        case 'l':
+            return 2;
+            break;
+        case 'd':
+            return 3;
+            break;
+        default:
+            break;
+        }
+    }
+
+    char convertDir(int dir) {
+        if (dir == 0) return 'r';
+        if (dir == 1) return 'u';
+        if (dir == 2) return 'l';
+        if (dir == 3) return 'd';
+        return ' ';
+    }
+
+    void update(std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH>& maze, Ghost& i_ghost_0, Pacman& i_pacman) {
         int availableWays = 0;
+        bool move = 0;
+
+        int speed = GHOST_SPEED;
+        
+        //Here the gohst starts and stops being frightened.
+        if (0 == frightened_mode && i_pacman.get_energizer_timer() == ENERGIZER_DURATION)
+        {
+            frightened_speed_timer = GHOST_FRIGHTENED_SPEED;
+            frightened_mode = 1;
+        }
+        else if (0 == i_pacman.get_energizer_timer() && 1 == frightened_mode)
+        {
+            frightened_mode = 0;
+        }
+
+        
+        //I used the modulo operator in case the gohst goes outside the grid.
+        if (2 == frightened_mode && 0 == pos.x % GHOST_ESCAPE_SPEED && 0 == pos.y % GHOST_ESCAPE_SPEED)
+        {
+            speed = GHOST_ESCAPE_SPEED;
+        }
+        pthread_mutex_lock(&mutex1);
+        update_target(i_pacman.getDirection(), i_ghost_0.getPostition(), i_pacman.getPostition());
+        pthread_mutex_unlock(&mutex1);
 
         std::array<bool, 4> walls;
-        walls[0] = map_collision(0, 0, GHOST_SPEED + pos.x, pos.y, maze);
-        walls[1] = map_collision(0, 0, pos.x, pos.y - GHOST_SPEED, maze);
-        walls[2] = map_collision(0, 0, pos.x - GHOST_SPEED, pos.y, maze);
-        walls[3] = map_collision(0, 0, pos.x, GHOST_SPEED + pos.y, maze);
+        walls[0] = map_collision(0, use_door, GHOST_SPEED + pos.x, pos.y, maze);
+        walls[1] = map_collision(0, use_door, pos.x, pos.y - GHOST_SPEED, maze);
+        walls[2] = map_collision(0, use_door, pos.x - GHOST_SPEED, pos.y, maze);
+        walls[3] = map_collision(0, use_door, pos.x, GHOST_SPEED + pos.y, maze);
 
         int dir;
         if (direction == 'r') dir = 0;
@@ -313,6 +638,8 @@ public:
         else if (direction == 'l') dir = 2;
         else if (direction == 'd') dir = 3;
 
+        // here is the random ghost movement algorithm
+        /*
         for (int i = 0; i < 4; i++) {
             if (i == (dir + 2) % 4) {
                 continue;
@@ -341,52 +668,171 @@ public:
                 }
             }
         }
+        */
 
-        if (walls[dir] == 0) {
-            switch (direction)
+       if (1 != frightened_mode)
+        {
+            //I used 4 because using a number between 0 and 3 will make the gohst move in a direction it can't move.
+            unsigned char optimal_direction = 4;
+
+            //The gohst can move.
+            move = 1;
+
+            for (unsigned char a = 0; a < 4; a++)
             {
-            case 'u':
-                pos.y -= GHOST_SPEED;
-                break;
-            case 'd':
-                pos.y += GHOST_SPEED;
-                break;
-            case 'l':
-                pos.x -= GHOST_SPEED;
-                break;
-            case 'r':
-                pos.x += GHOST_SPEED;
-                break;
-            
-            default:
-                break;
+                //Gohsts can't turn back! (Unless they really have to)
+                if (a == (2 + dir) % 4)
+                {
+                    continue;
+                }
+                else if (0 == walls[a])
+                {
+                    if (4 == optimal_direction)
+                    {
+                        optimal_direction = a;
+                    }
+
+                    availableWays++;
+
+                    if (getTargetDistance(convertDir(a)) < getTargetDistance(convertDir(optimal_direction)))
+                    {
+                        //The optimal direction is the direction that's closest to the target.
+                        optimal_direction = a;
+                    }
+                }
+            }
+
+            if (1 < availableWays)
+            {
+                //When the gohst is at the intersection, it chooses the optimal direction.
+                direction = convertDir(optimal_direction);
+            }
+            else
+            {
+                if (4 == optimal_direction)
+                {
+                    //"Unless they have to" part.
+                    direction = convertDir((2 + dir) % 4);
+                }
+                else
+                {
+                    direction = convertDir(optimal_direction);
+                }
+            }
+        }
+        else
+        {
+            //I used rand() because I figured that we're only using randomness here, and there's no need to use a whole library for it.
+            unsigned char random_direction = rand() % 4;
+
+            if (0 == frightened_speed_timer)
+            {
+                //The gohst can move after a certain number of frames.
+                move = 1;
+
+                frightened_speed_timer = GHOST_FRIGHTENED_SPEED;
+
+                for (unsigned char a = 0; a < 4; a++)
+                {
+                    //They can't turn back even if they're frightened.
+                    if (a == (2 + dir) % 4)
+                    {
+                        continue;
+                    }
+                    else if (0 == walls[a])
+                    {
+                        availableWays++;
+                    }
+                }
+
+                if (0 < availableWays)
+                {
+                    while (1 == walls[random_direction] || random_direction == (2 + dir) % 4)
+                    {
+                        //We keep picking a random direction until we can use it.
+                        random_direction = rand() % 4;
+                    }
+
+                    direction = convertDir(random_direction);
+                }
+                else
+                {
+                    //If there's no other way, it turns back.
+                    direction = convertDir((2 + dir) % 4);
+                }
+            }
+            else
+            {
+                frightened_speed_timer--;
             }
         }
 
-        if (-TILE_SIZE >= pos.x)
-        {
-            pos.x = TILE_SIZE * MAZE_WIDTH - GHOST_SPEED;
-        }
-        else if (TILE_SIZE * MAZE_WIDTH <= pos.x)
-        {
-            pos.x = GHOST_SPEED - TILE_SIZE;
+        if (move == 1) {
+            switch (direction)
+            {
+            case 'u':
+                pos.y -= speed;
+                break;
+            case 'd':
+                pos.y += speed;
+                break;
+            case 'l':
+                pos.x -= speed;
+                break;
+            case 'r':
+                pos.x += speed;
+                break;
+            default:
+                break;
+            }
+
+            if (-TILE_SIZE >= pos.x)
+            {
+                pos.x = TILE_SIZE * MAZE_WIDTH - speed;
+            }
+            else if (pos.x >= TILE_SIZE * MAZE_WIDTH)
+            {
+                pos.x = speed - TILE_SIZE;
+            }
         }
 
+        pthread_mutex_lock(&mutex);
+        if (1 == pacman_collision(i_pacman.getPosition()))
+        {
+            if (0 == frightened_mode) //When the gohst is not frightened and collides with Pacman, we kill Pacman.
+            {
+                // i_pacman.set_dead(1);
+            }
+            else //Otherwise, the gohst starts running towards the house.
+            {
+                use_door = 1;
+                frightened_mode = 2;
+                target = home;
+            }
+        }
+        pthread_mutex_unlock(&mutex);
     }
 };
 
 class GhostManager {
     public:
     vector<Ghost> ghosts;
-        GhostManager() {
-            ghosts = {Ghost(0), Ghost(1), Ghost(2), Ghost(3)};
-        }
+    GhostManager() {
+        ghosts = {Ghost(0), Ghost(1), Ghost(2), Ghost(3)};
+    }
 
-        void draw(RenderWindow& window) {
-            for (Ghost& ghost: ghosts) {
-                ghost.draw(window);
-            }
+    void draw(RenderWindow& window) {
+        for (Ghost& ghost: ghosts) {
+            ghost.draw(window);
         }
+    }
+
+    void reset() {
+        for (Ghost& ghost : ghosts) {
+            //We use the blue ghost to get the location of the house and the red ghost to get the location of the exit.
+            ghost.reset(ghosts[2].getPostition(), ghosts[0].getPostition());
+        }
+    } 
 
 } ghostManager;
 
@@ -482,20 +928,25 @@ void drawMap(std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH>& maze, Render
                 window.draw(tile);
             }
             else if (maze[i][j] == Tile::Pellet) {
-                CircleShape pellet(TILE_SIZE / 10);
+                CircleShape pellet(TILE_SIZE / 8);
                 pellet.setFillColor(Color::White);
                 pellet.setPosition(TILE_SIZE * i + TILE_SIZE / 2 - pellet.getRadius(), TILE_SIZE * j + TILE_SIZE / 2 - pellet.getRadius());
                 window.draw(pellet);
             }
+            else if (maze[i][j] == Tile::Door) {
+                tile.setFillColor(Color(255, 255, 255));
+                window.draw(tile);
+            }
             else if (maze[i][j] == Tile::Energizer) {
-                CircleShape energizer(TILE_SIZE / 2);
-                energizer.setFillColor(Color::Blue);
+                CircleShape energizer(TILE_SIZE / 3);
+                energizer.setFillColor(Color(230, 194, 124));
                 energizer.setPosition(TILE_SIZE * i + TILE_SIZE / 2 - energizer.getRadius(), TILE_SIZE * j + TILE_SIZE / 2 - energizer.getRadius());
                 window.draw(energizer);
             }
         }
     }
 }
+
 
 
 // Game Engine Thread Function
@@ -519,7 +970,6 @@ void* userInterfaceThread(void*) {
             // Subtract the fixed timestep from accumulated time
             accumulatedTime -= FRAME;
         }
-        
         // Rendering
 
         // Sleep or yield to give time to other threads
@@ -537,7 +987,9 @@ void* ghostControllerThread(void* arg) {
     // Ghost initialization
 
     Clock clock;
+    Clock modeSwitchClock; int modeSwitchTime = 8;
     int accumulatedTime = 0;
+    bool start = false;
     while (true) {
         // Calculate elapsed time since the last update
         int dt = clock.restart().asMicroseconds();
@@ -545,16 +997,15 @@ void* ghostControllerThread(void* arg) {
 
         // Update game logic based on the fixed timestep
         while (accumulatedTime >= FRAME) {
-            
-            
             // Game logic
-            ghostManager.ghosts[ghostId].update(maze);
-            
-
+            if (modeSwitchClock.getElapsedTime().asSeconds() >= modeSwitchTime && !start) {
+                ghostManager.ghosts[ghostId].switchMovementMode();
+                start = true;
+            }
+            ghostManager.ghosts[ghostId].update(maze, ghostManager.ghosts[0], pacman);
             // Subtract the fixed timestep from accumulated time
             accumulatedTime -= FRAME;
         }
-        
         // Rendering
 
         // Sleep or yield to give time to other threads
@@ -565,13 +1016,17 @@ void* ghostControllerThread(void* arg) {
     return nullptr;
 }
 
+
 int main() {
     srand(time(NULL));
     // Initialize mutex
     pthread_mutex_init(&mutex, NULL);
+    pthread_mutex_init(&mutex1, NULL);
 
     // Create window
-    sf::RenderWindow window(sf::VideoMode(WINDOW_WIDTH, WINDOW_HEIGHT), "SFML Pacman");
+    sf::RenderWindow window(sf::VideoMode(TILE_SIZE * MAZE_WIDTH * SCREEN_RESIZE, (FONT_HEIGHT + TILE_SIZE * MAZE_HEIGHT) * SCREEN_RESIZE), "Pac-Man", sf::Style::Close);
+	//Resizing the window.
+	window.setView(sf::View(sf::FloatRect(0, 0, TILE_SIZE * MAZE_WIDTH, FONT_HEIGHT + TILE_SIZE * MAZE_HEIGHT)));
 
     // Set thread attributes to create detached threads
     pthread_attr_t attr;
@@ -592,9 +1047,9 @@ int main() {
     // Destroy thread attributes
     pthread_attr_destroy(&attr);
 
-
+    
     maze = getMaze(mazeMapping, ghostManager.ghosts, pacman);
-
+    ghostManager.reset();
     // Main loop
     Clock clock; float dt; float delay = 0;
     while (window.isOpen()) {
@@ -639,6 +1094,7 @@ int main() {
 
     // Destroy mutex
     pthread_mutex_destroy(&mutex);
+    pthread_mutex_destroy(&mutex1);
 
     return 0;
 }
