@@ -6,6 +6,7 @@
 #include <vector>
 #include <semaphore.h> 
 #include <unistd.h> 
+#include <SFML/Audio.hpp>
 
 #include "globals.hpp"
 
@@ -321,7 +322,7 @@ public:
             }
             else
             {
-                //You can only die once.
+                
                 animationOver = 1;
             }
         }
@@ -477,7 +478,7 @@ public:
         pthread_mutex_lock(&mutexPacmanPos);
         if (newDirection == 'r')
         {
-            if (0 == walls[0]) //You can't turn in this direction if there's a wall there.
+            if (0 == walls[0]) //since there is wall u cant turn in this direction
             {
                 direction = 'r';
             }
@@ -662,16 +663,15 @@ public:
                             }
                         }
 
-                        //We're sending a vector from the red gohst to the second cell in front of Pacman.
-                        //Then we're doubling it.
+                       
                         target.x += target.x - i_ghost_0_position.x;
                         target.y += target.y - i_ghost_0_position.y;
 
                         break;
                     }
-                    case 3: //The orange gohst will chase Pacman until it gets close to him. Then it'll switch to the scatter mode.
+                    case 3: 
                     {
-                        //Using the Pythagoras' theorem again.
+                       
                         if (TILE_SIZE * GHOST_3_CHASE <= sqrt(pow(pos.x - i_pacman_position.x, 2) + pow(pos.y - i_pacman_position.y, 2)))
                         {
                             target = i_pacman_position;
@@ -875,7 +875,7 @@ public:
 
 
 
-        //Here the gohst starts and stops being frightened.
+        //activating frightened-mode
         if (0 == frightened_mode && i_pacman.get_energizer_timer() == ENERGIZER_DURATION)
         {
             frightened_speed_timer = GHOST_FRIGHTENED_SPEED;
@@ -892,7 +892,7 @@ public:
         if (ghostReaders == 0) pthread_mutex_unlock(&mutexPacmanPos);
         pthread_mutex_unlock(&ghostRead);
         
-        //I used the modulo operator in case the gohst goes outside the grid.
+       
         if (2 == frightened_mode && 0 == pos.x % GHOST_ESCAPE_SPEED && 0 == pos.y % GHOST_ESCAPE_SPEED)
         {
             speed = GHOST_ESCAPE_SPEED;
@@ -930,37 +930,6 @@ public:
         else if (direction == 'l') dir = 2;
         else if (direction == 'd') dir = 3;
 
-        // here is the random ghost movement algorithm
-        /*
-        for (int i = 0; i < 4; i++) {
-            if (i == (dir + 2) % 4) {
-                continue;
-            }
-            else if (walls[i] == 0) {
-                availableWays++;
-            }
-        }
-
-        if (availableWays > 1) {
-            int newDir = rand() % 4;
-            if (walls[newDir] == 0 && newDir != (2 + direction) % 4) {
-                if (newDir == 0) direction = 'r';
-                else if (newDir == 1) direction = 'u';
-                else if (newDir == 2) direction = 'l';
-                else if (newDir == 3) direction = 'd';
-            }
-        }
-        else if (walls[dir] == 1) {
-            for (int i = 0; i < 4; i++) {
-                if (walls[i] == 0 && i != (2 + dir) % 4) {
-                    if (i == 0) direction = 'r';
-                    else if (i == 1) direction = 'u';
-                    else if (i == 2) direction = 'l';
-                    else if (i == 3) direction = 'd';
-                }
-            }
-        }
-        */
 
         if (1 != frightened_mode && leftHome)
         {
@@ -1241,40 +1210,40 @@ std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH> getMaze(const std::array<s
 
 					break;
 				}
-				//Red ghost
+				//0 denotes Red ghost
 				case '0':
 				{
 					ghosts[0].setPosition(TILE_SIZE * b, TILE_SIZE * a);
 					break;
 				}
-				//Pink ghost
+				//1 denotes Pink ghost
 				case '1':
 				{
 					ghosts[1].setPosition(TILE_SIZE * b, TILE_SIZE * a);
 
 					break;
 				}
-				//Blue (cyan) ghost
+				//2 denotes Blue (cyan) ghost
 				case '2':
 				{
 					ghosts[2].setPosition(TILE_SIZE * b, TILE_SIZE * a);
 
 					break;
 				}
-				//Orange ghost
+				//3 denotes orange ghost
 				case '3':
 				{
 					ghosts[3].setPosition(TILE_SIZE * b, TILE_SIZE * a);
 
 					break;
 				}
-				//Pacman!
+				//P denotes  pacman
 				case 'P':
 				{
 					pacman.setPosition(TILE_SIZE * b, TILE_SIZE * a);
 					break;
 				}
-				//This looks like a surprised face.
+				//o denotes power pellet
 				case 'o':
 				{
 					output_map[b][a] = Tile::Energizer;
@@ -1289,12 +1258,27 @@ std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH> getMaze(const std::array<s
 
 
 void drawMap(std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH>& maze, RenderWindow& window) {
-    RectangleShape tile(Vector2f(TILE_SIZE, TILE_SIZE));
+    sf::Texture wallTexture;
+    wallTexture.loadFromFile("assets/walls.jpeg");
+
+     sf::Texture doorTexture;
+    doorTexture.loadFromFile("assets/DoorTexture.jpeg");
+      sf::Sprite doorSprite(doorTexture);
+    doorSprite.setScale(TILE_SIZE / doorTexture.getSize().x, TILE_SIZE / doorTexture.getSize().y);
+    
+     sf::Sprite wallSprite(wallTexture);
+     RectangleShape tile(Vector2f(TILE_SIZE, TILE_SIZE));
+    
+     float scale = 16.f / 512.f; 
+   // tile.setScale(scale, scale);
+    wallSprite.setScale(TILE_SIZE / wallTexture.getSize().x, TILE_SIZE / wallTexture.getSize().y);
+
 
     for (int i = 0; i < MAZE_WIDTH; i++) {
         for (int j = 0; j < MAZE_HEIGHT; j++) {
             tile.setPosition(TILE_SIZE * i, TILE_SIZE * j);
             if (maze[i][j] == Tile::Wall) {
+                 tile.setTexture(&wallTexture); 
                 tile.setFillColor(Color(128, 128, 128));
                 window.draw(tile);
             }
@@ -1306,7 +1290,9 @@ void drawMap(std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH>& maze, Render
             }
             else if (maze[i][j] == Tile::Door) {
                 tile.setFillColor(Color(255, 255, 255));
-                window.draw(tile);
+                tile.setTexture(&doorTexture); 
+               // window.draw(doorSprite);
+               window.draw(tile);
             }
             else if (maze[i][j] == Tile::Energizer) {
                 CircleShape energizer(TILE_SIZE / 3);
@@ -1343,9 +1329,7 @@ void* userInterfaceThread(void*) {
         }
         // Rendering
 
-        // Sleep or yield to give time to other threads
-        // For simplicity, you can use usleep or sleep in POSIX systems
-        // usleep(10000); // Sleep for 10 milliseconds
+       
     }
 
     return nullptr;
@@ -1364,7 +1348,7 @@ void* ghostControllerThread(void* arg) {
         int dt = clock.restart().asMicroseconds();
         accumulatedTime += dt;
 
-        // Update game logic based on the fixed timestep
+        
         while (accumulatedTime >= FRAME) {
             // Game logic
             if (modeSwitchClock.getElapsedTime().asSeconds() >= modeSwitchTime && !ghostManager.ghosts[ghostId].getStart()) {
@@ -1380,11 +1364,7 @@ void* ghostControllerThread(void* arg) {
             }
             accumulatedTime -= FRAME;
         }
-        // Rendering
-
-        // Sleep or yield to give time to other threads
-        // For simplicity, you can use usleep or sleep in POSIX systems
-        // usleep(10000); // Sleep for 10 milliseconds
+       
     }
 
     return nullptr;
@@ -1553,6 +1533,12 @@ int main() {
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    
+    sf::Music music;
+     music.openFromFile("assets/Thors Hammer - Ethan Meixsell.wav");
+      music.play();
+    
+   
 
     pthread_t keyCardProducerID;
     pthread_create(&keyCardProducerID, &attr, produceKeyPermit, NULL);
