@@ -4,25 +4,60 @@
 #include <array>
 #include <iostream>
 #include <vector>
+#include <semaphore.h> 
+#include <unistd.h> 
 
 #include "globals.hpp"
 
 using namespace std;
 using namespace sf;
 
-// Constants
-pthread_mutex_t mutex;
-pthread_mutex_t mutex1;
 
+pthread_mutex_t mutexPacmanPos;
+pthread_mutex_t ghostRead;
+int ghostReaders = 0;
+
+pthread_mutex_t ghostVars[4];
+
+
+pthread_mutex_t mutexScoreLives;
+pthread_mutex_t gridLock;
+
+pthread_mutex_t keyPermitMutex;
+int key = 0;
+int permit = 0;
+
+pthread_mutex_t speedBoostMutex;
+int speedBoost = 0;
+
+pthread_mutex_t enrgizerMutex;
+int energizersProduced = 4;
+
+
+
+vector<Position> energizerPos = {
+    {2, 2},
+    {18, 2},
+    {2, 15},
+    {18, 15}
+};
+
+
+
+const int TILE_SIZE = 16;
+Position SPEEDBOOST_POS1(TILE_SIZE * 2, TILE_SIZE * 5);
+Position SPEEDBOOST_POS2(TILE_SIZE * 18, TILE_SIZE * 19);
+Position KEY_POS(TILE_SIZE * 8, TILE_SIZE * 11);
+Position PERMIT_POS(12 * TILE_SIZE, 9 * TILE_SIZE);
 const int FONT_HEIGHT = 16;
 const int MAZE_WIDTH = 21;
 const int MAZE_HEIGHT = 21;
 const int SCREEN_SIZE_FACTOR = 2;
-const int TILE_SIZE = 16;
 const int WINDOW_WIDTH = TILE_SIZE * MAZE_WIDTH;
 const int WINDOW_HEIGHT = TILE_SIZE * MAZE_HEIGHT;
 const int PACMAN_SPEED = 2;
-const int GHOST_SPEED = 2;
+const int GHOST_SPEED = 1;
+const int SPEED_UP = 2;
 const int ENERGIZER_DURATION = 512;
 const int GHOST_FLASH_START = 64;
 const int GHOST_ESCAPE_SPEED = 4;
@@ -45,33 +80,33 @@ const int FRAME = 15000;
 
 
 std::array<std::string, MAZE_HEIGHT> mazeMapping = {
-		" ################### ",
-		" #........#........# ",
-		" #o##.###.#.###.##o# ",
-		" #.................# ",
-		" #.##.#.#####.#.##.# ",
-		" #....#...#...#....# ",
-		" ####.### # ###.#### ",
-		"    #.#   0   #.#    ",
-		"#####.# ##=## #.#####",
-		"     .  #123#  .     ",
-		"#####.# ##### #.#####",
-		"    #.#       #.#    ",
-		" ####.# ##### #.#### ",
-		" #........#........# ",
-		" #.##.###.#.###.##.# ",
-		" #o.#.....P.....#.o# ",
-		" ##.#.#.#####.#.#.## ",
-		" #....#...#...#....# ",
-		" #.######.#.######.# ",
-		" #.................# ",
-		" ################### "
-	};
+    " ################### ",
+    " #........#........# ",
+    " #o##.###.#.###.##o# ",
+    " #.................# ",
+    " #.##.#.#####.#.##.# ",
+    " #....#...#...#....# ",
+    " ####.### # ###.#### ",
+    "    #.         .#    ",
+    "#####.####=####.#####",
+    "     .# 0  1  #.     ",
+    "#####.#    2  #.#####",
+    "    #.# 3     #.#    ",
+    " ####.#########.#### ",
+    " #........#........# ",
+    " #.##.###.#.###.##.# ",
+    " #o.#.....P.....#.o# ",
+    " ##.#.#.#####.#.#.## ",
+    " #....#...#...#....# ",
+    " #.######.#.######.# ",
+    " #.................# ",
+    " ################### "
+};
 
 
 std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH> maze;
 
-bool map_collision(bool i_collect_pellets, bool i_use_door, short i_x, short i_y, std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH>& maze, bool& pelletEaten)
+bool map_collision(bool i_collect_pellets, bool i_use_door, short i_x, short i_y, std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH>& maze, bool& pelletEaten, int energizerTimer = 0)
 {
 	bool output = 0;
 
@@ -132,25 +167,124 @@ bool map_collision(bool i_collect_pellets, bool i_use_door, short i_x, short i_y
 			else 
 			{
                 // here we are updating the maze which is the shared resource so we lock
-                pthread_mutex_lock(&mutex);
-				if (Tile::Energizer == maze[x][y])
-				{
-					output = 1;
+                pthread_mutex_lock(&gridLock);
+                pthread_mutex_lock(&enrgizerMutex);
+                if (energizersProduced > 0) {
 
-					maze[x][y] = Tile::Empty;
-				}
-				else if (Tile::Pellet == maze[x][y])
+                    if (Tile::Energizer == maze[x][y] && energizerTimer == 0) {
+                        output = 1;
+					    maze[x][y] = Tile::Empty;
+                        energizersProduced--;
+                    }
+                }
+                pthread_mutex_unlock(&enrgizerMutex);
+				if (Tile::Pellet == maze[x][y])
 				{
 					maze[x][y] = Tile::Empty;
                     pelletEaten = 1;
 				}
-                pthread_mutex_unlock(&mutex);
+                pthread_mutex_unlock(&gridLock);
 			}
 		}
 	}
 
 	return output;
 }
+
+class Key {
+public:
+    Sprite key;
+    Texture t;
+    Key() {
+        t.loadFromFile("assets/key.png");
+        key.setTexture(t);
+        key.setScale(0.03125, 0.03125);
+        key.setPosition(-100, -100);
+    }
+
+    void degenerate() {
+        key.setPosition(-100, -100);
+    }
+
+    void generate() {
+        key.setPosition(KEY_POS.x, KEY_POS.y);
+    }
+
+    Position getPos() {
+        return Position(key.getPosition().x, key.getPosition().y);
+    }
+
+    void draw(RenderWindow& window) {
+        window.draw(key);
+    }
+};
+
+class Permit {
+public:
+    Sprite permit;
+    Texture t;
+    Permit() {
+        t.loadFromFile("assets/check.png");
+        permit.setTexture(t);
+        permit.setScale(0.03125, 0.03125);
+        permit.setPosition(-100, -100);
+    }
+
+    Position getPos() {
+        return Position(permit.getPosition().x, permit.getPosition().y);
+    }
+
+    void degenerate() {
+        permit.setPosition(-100, -100);
+    }
+
+    void generate() {
+        permit.setPosition(PERMIT_POS.x, PERMIT_POS.y);
+    }
+
+    void draw(RenderWindow& window) {
+        window.draw(permit);
+    }
+};
+
+class SpeedBoost {
+public:
+    Sprite sb;
+    Texture t;
+    int id;
+    SpeedBoost(int id) {
+        t.loadFromFile("assets/speed.png");
+        sb.setTexture(t);
+        sb.setScale(0.03125, 0.03125);
+        sb.setPosition(-100, -100);
+        this->id = id;
+    }
+
+    Position getPos() {
+        return Position(sb.getPosition().x, sb.getPosition().y);
+    }
+
+    void degenerate() {
+        sb.setPosition(-100, -100);
+    }
+
+    void generate() {
+        if (id == 1) {
+            sb.setPosition(SPEEDBOOST_POS1.x, SPEEDBOOST_POS1.y);
+        }
+        if (id == 2) {
+            sb.setPosition(SPEEDBOOST_POS2.x, SPEEDBOOST_POS2.y);
+        }
+    }
+
+    void draw(RenderWindow& window) {
+        window.draw(sb);
+    }
+};
+
+SpeedBoost speedBoosts[] = {SpeedBoost(1), SpeedBoost(2)};
+Permit permits[] = {Permit(), Permit()};
+Key keys[] = {Key(), Key()};
 
 class Pacman {
 protected:
@@ -206,20 +340,24 @@ public:
     }
 
     void setDeadState( bool state) {
+        pthread_mutex_lock(&mutexScoreLives);
         isDead = state;
         if (state == 1) {
             animationTimer = 0;
             lives--;
         }
+        pthread_mutex_unlock(&mutexScoreLives);
     }
 
     void reset () {
+        pthread_mutex_lock(&mutexScoreLives);
         isDead = 0;
         direction = 'r';
         animationTimer = 0;
         animationOver = false;
         energizer_timer = 0;
         score = 0;
+        pthread_mutex_unlock(&mutexScoreLives);
     }
 
     char getDirection() {
@@ -231,7 +369,9 @@ public:
     }
 
     void setPosition(int x, int y) {
+        pthread_mutex_lock(&mutexPacmanPos);
         pos = {x, y};
+        pthread_mutex_unlock(&mutexPacmanPos);
     }
 
     void update(std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH>& maze) {
@@ -250,7 +390,7 @@ public:
         else if (direction == 'l') dir = 2;
         else if (direction == 'd') dir = 3;
 
-        pthread_mutex_lock(&mutex);
+        pthread_mutex_lock(&mutexPacmanPos);
         if (walls[dir] == 0) {
             switch (direction)
             {
@@ -271,10 +411,10 @@ public:
                 break;
             }
         }
-        pthread_mutex_unlock(&mutex);
+        pthread_mutex_unlock(&mutexPacmanPos);
 
 
-        pthread_mutex_lock(&mutex);
+        pthread_mutex_lock(&mutexPacmanPos);
         if (-TILE_SIZE >= pos.x)
         {
             pos.x = TILE_SIZE * MAZE_WIDTH - PACMAN_SPEED;
@@ -283,25 +423,25 @@ public:
         {
             pos.x = PACMAN_SPEED - TILE_SIZE;
         }
-        pthread_mutex_unlock(&mutex);
+        pthread_mutex_unlock(&mutexPacmanPos);
 
         
-        if (1 == map_collision(1, 0, pos.x, pos.y, maze, pelletEaten)) //When Pacman eats an energizer...
+        if (1 == map_collision(1, 0, pos.x, pos.y, maze, pelletEaten, energizer_timer)) //When Pacman eats an energizer...
         {
             //He becomes energized!
-            pthread_mutex_lock(&mutex);
+            pthread_mutex_lock(&mutexScoreLives);
             energizer_timer = ENERGIZER_DURATION;
             incScore(10);
-            pthread_mutex_unlock(&mutex);
+            pthread_mutex_unlock(&mutexScoreLives);
         }
         else
         {
-            pthread_mutex_lock(&mutex);
+            pthread_mutex_lock(&mutexScoreLives);
             energizer_timer = std::max(0, energizer_timer - 1);
             if (pelletEaten) {
                 incScore(1);
             }
-            pthread_mutex_unlock(&mutex);
+            pthread_mutex_unlock(&mutexScoreLives);
 
         }
         
@@ -334,7 +474,7 @@ public:
         walls[2] = map_collision(0, 0, pos.x - PACMAN_SPEED, pos.y, maze, dummy);
         walls[3] = map_collision(0, 0, pos.x, PACMAN_SPEED + pos.y, maze, dummy);
 
-        pthread_mutex_lock(&mutex);
+        pthread_mutex_lock(&mutexPacmanPos);
         if (newDirection == 'r')
         {
             if (0 == walls[0]) //You can't turn in this direction if there's a wall there.
@@ -366,27 +506,32 @@ public:
                 direction = 'd';
             }
         }
-        pthread_mutex_unlock(&mutex);
+        pthread_mutex_unlock(&mutexPacmanPos);
         // Unlock mutex after changing Pacman's direction
     }
 } pacman;
 
 
 class Ghost: public Pacman {
+    bool hasKey, hasPermit;
     int id;
     char movement_mode; 
     bool use_door;
     Position home;
-	
-	Position home_exit;
+	bool leftHome;
+	Position home_exit = Position(160, 112);
 	bool start;
 	Position target;
     int frightened_mode;
     int frightened_speed_timer;
+    bool canHaveSpeedBoost;
+    bool hasSpeedBoost;
 
 public:
     Ghost(int id) {
         this->id = id;
+        if (id % 2) canHaveSpeedBoost = true;
+        else canHaveSpeedBoost = false;
     }
 
     bool getStart() {
@@ -401,11 +546,14 @@ public:
                 if (home_exit == target) 
                 {
                     use_door = 0; 
+                    leftHome = true;                     
                 }
                 else if (home == target) 
                 {
                     frightened_mode = 0; 
-
+                    leftHome = 0;
+                    use_door = 0;
+                    hasKey = false;
                     target = home_exit; 
                 }
             }
@@ -551,6 +699,36 @@ public:
         return 0;
     }
 
+    bool speedBoostCollision(Position speedBoostPos) {
+        if (pos.x > speedBoostPos.x - TILE_SIZE && pos.x < TILE_SIZE + speedBoostPos.x)
+        {
+            if (pos.y > speedBoostPos.y - TILE_SIZE && pos.y < TILE_SIZE + speedBoostPos.y)
+            {
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    int keyPermitCollision(Position keyPos, Position permitPos) {
+        if (pos.x > keyPos.x - TILE_SIZE && pos.x < TILE_SIZE + keyPos.x)
+        {
+            if (pos.y > keyPos.y - TILE_SIZE && pos.y < TILE_SIZE + keyPos.y)
+            {
+                return 1; // for key
+            }
+        }
+
+        if (pos.x > permitPos.x - TILE_SIZE && pos.x < TILE_SIZE + permitPos.x)
+        {
+            if (pos.y > permitPos.y - TILE_SIZE && pos.y < TILE_SIZE + permitPos.y)
+            {
+                return 2; // for permit
+            }
+        }
+        return 0;
+    }
+
     void switchMovementMode() {
         if (movement_mode == 's') {
             movement_mode = 'c';
@@ -561,15 +739,19 @@ public:
 
     void reset(const Position& i_home, const Position& i_home_exit) {
         
+        pthread_mutex_lock(&ghostVars[id]);
+        hasKey = false; hasPermit = false;
         movement_mode = 's';
-        use_door = 0 < id;
+        leftHome = 0; // when this is 1 this means ghost behaviour outside home activated
+        use_door = 0; // this is 1 means that ghost can go outside the house
         direction = 'r';
         home = i_home;
-        home_exit = i_home_exit;
-        target = i_home_exit;
+        target = home_exit;
         frightened_mode = 0;
 	    frightened_speed_timer = 0;
         start = false;
+        hasSpeedBoost = false;
+        pthread_mutex_unlock(&ghostVars[id]);
     }
     float getTargetDistance(char dir) {
         short x = pos.x;
@@ -638,8 +820,10 @@ public:
 
         }
 
+        pthread_mutex_lock(&ghostVars[id]);
         ghostHead.setPosition(pos.x, pos.y);
         ghostBody.setPosition(pos.x, pos.y + TILE_SIZE / 2);
+        pthread_mutex_unlock(&ghostVars[id]);
 
         window.draw(ghostHead);
         window.draw(ghostBody);
@@ -683,6 +867,14 @@ public:
 
         int speed = GHOST_SPEED;
         
+        // begin read
+        pthread_mutex_lock(&ghostRead);
+        ghostReaders++;
+        if (ghostReaders == 1) pthread_mutex_lock(&mutexPacmanPos);
+        pthread_mutex_unlock(&ghostRead);
+
+
+
         //Here the gohst starts and stops being frightened.
         if (0 == frightened_mode && i_pacman.get_energizer_timer() == ENERGIZER_DURATION)
         {
@@ -693,16 +885,37 @@ public:
         {
             frightened_mode = 0;
         }
-
+        
+        // end read
+        pthread_mutex_lock(&ghostRead);
+        ghostReaders--;
+        if (ghostReaders == 0) pthread_mutex_unlock(&mutexPacmanPos);
+        pthread_mutex_unlock(&ghostRead);
         
         //I used the modulo operator in case the gohst goes outside the grid.
         if (2 == frightened_mode && 0 == pos.x % GHOST_ESCAPE_SPEED && 0 == pos.y % GHOST_ESCAPE_SPEED)
         {
             speed = GHOST_ESCAPE_SPEED;
         }
-        pthread_mutex_lock(&mutex1);
+        
+        if (frightened_mode == 0 && hasSpeedBoost && 0 == pos.x % (SPEED_UP) && 0 == pos.y % (SPEED_UP)) {
+            speed = SPEED_UP;
+        }
+
+        // begin read
+        pthread_mutex_lock(&ghostRead);
+        ghostReaders++;
+        if (ghostReaders == 1) pthread_mutex_lock(&mutexPacmanPos);
+        pthread_mutex_unlock(&ghostRead);
+        
         update_target(i_pacman.getDirection(), i_ghost_0.getPostition(), i_pacman.getPostition());
-        pthread_mutex_unlock(&mutex1);
+        
+        // end read
+        pthread_mutex_lock(&ghostRead);
+        ghostReaders--;
+        if (ghostReaders == 0) pthread_mutex_unlock(&mutexPacmanPos);
+        pthread_mutex_unlock(&ghostRead);
+        
 
         bool dummy = false;
         std::array<bool, 4> walls;
@@ -749,17 +962,14 @@ public:
         }
         */
 
-       if (1 != frightened_mode)
+        if (1 != frightened_mode && leftHome)
         {
-            //I used 4 because using a number between 0 and 3 will make the gohst move in a direction it can't move.
             unsigned char optimal_direction = 4;
 
-            //The gohst can move.
             move = 1;
 
             for (unsigned char a = 0; a < 4; a++)
             {
-                //Gohsts can't turn back! (Unless they really have to)
                 if (a == (2 + dir) % 4)
                 {
                     continue;
@@ -775,7 +985,6 @@ public:
 
                     if (getTargetDistance(convertDir(a)) < getTargetDistance(convertDir(optimal_direction)))
                     {
-                        //The optimal direction is the direction that's closest to the target.
                         optimal_direction = a;
                     }
                 }
@@ -783,37 +992,33 @@ public:
 
             if (1 < availableWays)
             {
-                //When the gohst is at the intersection, it chooses the optimal direction.
+                pthread_mutex_lock(&ghostVars[id]);
                 direction = convertDir(optimal_direction);
+                pthread_mutex_unlock(&ghostVars[id]);
             }
             else
             {
                 if (4 == optimal_direction)
                 {
-                    //"Unless they have to" part.
+                    pthread_mutex_lock(&ghostVars[id]);
                     direction = convertDir((2 + dir) % 4);
+                    pthread_mutex_unlock(&ghostVars[id]);
                 }
                 else
-                {
+                {   pthread_mutex_lock(&ghostVars[id]);
                     direction = convertDir(optimal_direction);
+                    pthread_mutex_unlock(&ghostVars[id]);
                 }
             }
         }
         else
         {
-            //I used rand() because I figured that we're only using randomness here, and there's no need to use a whole library for it.
             unsigned char random_direction = rand() % 4;
-
-            if (0 == frightened_speed_timer)
+            if (!leftHome) 
             {
-                //The gohst can move after a certain number of frames.
                 move = 1;
-
-                frightened_speed_timer = GHOST_FRIGHTENED_SPEED;
-
                 for (unsigned char a = 0; a < 4; a++)
                 {
-                    //They can't turn back even if they're frightened.
                     if (a == (2 + dir) % 4)
                     {
                         continue;
@@ -828,25 +1033,63 @@ public:
                 {
                     while (1 == walls[random_direction] || random_direction == (2 + dir) % 4)
                     {
-                        //We keep picking a random direction until we can use it.
                         random_direction = rand() % 4;
                     }
 
+                    pthread_mutex_lock(&ghostVars[id]);
                     direction = convertDir(random_direction);
+                    pthread_mutex_unlock(&ghostVars[id]);
                 }
                 else
                 {
-                    //If there's no other way, it turns back.
+                    pthread_mutex_lock(&ghostVars[id]);
                     direction = convertDir((2 + dir) % 4);
+                    pthread_mutex_unlock(&ghostVars[id]);
                 }
-            }
-            else
-            {
-                frightened_speed_timer--;
+            } else {
+                if (0 == frightened_speed_timer)
+                {
+                    move = 1;
+                    frightened_speed_timer = GHOST_FRIGHTENED_SPEED;
+                    for (unsigned char a = 0; a < 4; a++)
+                    {
+                        if (a == (2 + dir) % 4)
+                        {
+                            continue;
+                        }
+                        else if (0 == walls[a])
+                        {
+                            availableWays++;
+                        }
+                    }
+
+                    if (0 < availableWays)
+                    {
+                        while (1 == walls[random_direction] || random_direction == (2 + dir) % 4)
+                        {
+                            random_direction = rand() % 4;
+                        }
+                        pthread_mutex_lock(&ghostVars[id]);
+                        direction = convertDir(random_direction);
+                        pthread_mutex_unlock(&ghostVars[id]);
+                    }
+                    else
+                    {
+                        pthread_mutex_lock(&ghostVars[id]);
+                        direction = convertDir((2 + dir) % 4);
+                        pthread_mutex_unlock(&ghostVars[id]);
+                    }
+                }
+                else
+                {
+                    frightened_speed_timer--;
+                }
             }
         }
 
+        
         if (move == 1) {
+            pthread_mutex_lock(&ghostVars[id]);
             switch (direction)
             {
             case 'u':
@@ -873,23 +1116,78 @@ public:
             {
                 pos.x = speed - TILE_SIZE;
             }
+            pthread_mutex_unlock(&ghostVars[id]);
         }
 
-        pthread_mutex_lock(&mutex);
-        if (1 == pacman_collision(i_pacman.getPosition()))
+        // begin write
+        pthread_mutex_lock(&ghostRead);
+        ghostReaders++;
+        if (ghostReaders == 1) pthread_mutex_lock(&mutexPacmanPos);
+        pthread_mutex_unlock(&ghostRead);
+
+        Position pacPos = i_pacman.getPosition();
+
+        // end read
+        pthread_mutex_lock(&ghostRead);
+        ghostReaders--;
+        if (ghostReaders == 0) pthread_mutex_unlock(&mutexPacmanPos);
+        pthread_mutex_unlock(&ghostRead);
+
+        for (int i = 0; i < 2; i++) {
+            pthread_mutex_lock(&speedBoostMutex);
+            if (speedBoostCollision(speedBoosts[i].getPos()) && canHaveSpeedBoost && !hasSpeedBoost) {
+                if (speedBoost > 0) {
+                    speedBoosts[speedBoost - 1].degenerate();
+                    speedBoost--;
+                    hasSpeedBoost = true;
+                }
+            }
+            pthread_mutex_unlock(&speedBoostMutex);
+        }
+
+        for (int i = 0; i < 2; i++) {
+            pthread_mutex_lock(&keyPermitMutex);
+            int status = keyPermitCollision(keys[i].getPos(), permits[i].getPos());
+            if (status == 1) { // for key;
+                if (!hasKey) {
+                    if (key > 0) {
+                        keys[i].degenerate();
+                        key--;
+                        hasKey = true;
+                    }
+                }
+            }
+            pthread_mutex_unlock(&keyPermitMutex);
+            pthread_mutex_lock(&keyPermitMutex);
+            if (status == 2) { // for permit
+                if (hasKey) {
+                    if (permit > 0) {
+                        permits[i].degenerate();
+                        permit--;
+                        use_door = 1;
+                        leftHome = 1;
+                        target = home_exit;
+                    }
+                }
+            }
+            pthread_mutex_unlock(&keyPermitMutex);
+        }
+
+        if (1 == pacman_collision(pacPos))
         {
-            if (0 == frightened_mode) //When the gohst is not frightened and collides with Pacman, we kill Pacman.
+            if (0 == frightened_mode) 
             {
                 i_pacman.setDeadState(1);
             }
-            else //Otherwise, the gohst starts running towards the house.
-            {
+            else 
+            {   
+                pthread_mutex_lock(&mutexPacmanPos);
                 use_door = 1;
                 frightened_mode = 2;
                 target = home;
+                pthread_mutex_unlock(&mutexPacmanPos);
             }
         }
-        pthread_mutex_unlock(&mutex);
     }
 };
 
@@ -908,7 +1206,6 @@ class GhostManager {
 
     void reset() {
         for (Ghost& ghost : ghosts) {
-            //We use the blue ghost to get the location of the house and the red ghost to get the location of the exit.
             ghost.reset(ghosts[2].getPostition(), ghosts[0].getPostition());
         }
     } 
@@ -917,20 +1214,15 @@ class GhostManager {
 
 std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH> getMaze(const std::array<std::string, MAZE_HEIGHT>& i_map_sketch, std::vector<Ghost>& ghosts, Pacman& pacman)
 {
-	//Is it okay if I put {} here? I feel like I'm doing something illegal.
-	//But if I don't put it there, Visual Studio keeps saying "lOcAl vArIaBlE Is nOt iNiTiAlIzEd".
 	std::array<std::array<Tile, MAZE_HEIGHT>, MAZE_WIDTH> output_map{};
-
 	for (unsigned char a = 0; a < MAZE_HEIGHT; a++)
 	{
 		for (unsigned char b = 0; b < MAZE_WIDTH; b++)
 		{
-			//By default, every Tile is empty.
 			output_map[b][a] = Tile::Empty;
 
 			switch (i_map_sketch[a][b])
 			{
-				//#wall #obstacle #youcantgothroughme
 				case '#':
 				{
 					output_map[b][a] = Tile::Wall;
@@ -1063,7 +1355,6 @@ void* userInterfaceThread(void*) {
 // Ghost Controller Thread Function
 void* ghostControllerThread(void* arg) {
     int ghostId = *((int*)arg);
-    // Ghost initialization
 
     Clock clock;
     Clock modeSwitchClock; int modeSwitchTime = 8;
@@ -1077,14 +1368,16 @@ void* ghostControllerThread(void* arg) {
         while (accumulatedTime >= FRAME) {
             // Game logic
             if (modeSwitchClock.getElapsedTime().asSeconds() >= modeSwitchTime && !ghostManager.ghosts[ghostId].getStart()) {
+                
                 ghostManager.ghosts[ghostId].switchMovementMode();
                 ghostManager.ghosts[ghostId].setStart(true);
+                
                 modeSwitchClock.restart();
             }
             if (!pacman.getDeadState()) {
+                
                 ghostManager.ghosts[ghostId].update(maze, ghostManager.ghosts[0], pacman);
             }
-            // Subtract the fixed timestep from accumulated time
             accumulatedTime -= FRAME;
         }
         // Rendering
@@ -1143,25 +1436,137 @@ void draw_text(unsigned short i_x, unsigned short i_y, const std::string& i_text
     }
 }
 
+void* produceKeyPermit(void*) {
+    srand(time(NULL));
+    sf::Clock clock;
+    const float productionInterval = 5;
+    while (true) {
+    // Check if enough time has passed since the last production
+        sf::Time elapsedTime = clock.getElapsedTime();
+        if (elapsedTime.asSeconds() >= productionInterval) {
+            // Generate random empty position within energizer locations
+            int x = rand() % 2;
+
+            if (x == 1) // generate key 
+            {
+                pthread_mutex_lock(&keyPermitMutex);
+                if (key < 2) {
+                    keys[key].generate();
+                    key++;
+                }
+                pthread_mutex_unlock(&keyPermitMutex);
+            }
+            else { // generate permit
+                pthread_mutex_lock(&keyPermitMutex);
+                if (permit < 2) {
+                    permits[permit].generate();
+                    permit++;
+                }
+                pthread_mutex_unlock(&keyPermitMutex);
+            }
+            clock.restart();
+        }
+
+    }
+
+    return NULL;
+}
+
+void* produceSpeedBoost(void*) {
+    sf::Clock clock;
+    const float productionInterval = 5;
+    while (true) {
+    // Check if enough time has passed since the last production
+        sf::Time elapsedTime = clock.getElapsedTime();
+        if (elapsedTime.asSeconds() >= productionInterval) {
+            // Generate random empty position within energizer locations
+            pthread_mutex_lock(&speedBoostMutex);   
+            if (speedBoost < 2) {
+                speedBoosts[speedBoost].generate();
+                speedBoost++;
+            }
+            pthread_mutex_unlock(&speedBoostMutex);   
+            clock.restart();
+        }
+    }
+
+}
+
+void* produceEnergizer(void*) {
+
+    sf::Clock clock;
+    const float productionInterval = 10;
+    while (true) {
+    // Check if enough time has passed since the last production
+        sf::Time elapsedTime = clock.getElapsedTime();
+        if (elapsedTime.asSeconds() >= productionInterval) {
+            // Generate random empty position within energizer locations
+            vector<bool> emptyPositionsState(4, false);
+            vector<int> emptyPositions;
+            for (int i = 0; i < 4; i++) {
+                if (maze[energizerPos[i].x][energizerPos[i].y] == Tile::Empty) {
+                    emptyPositionsState[i] = true;
+                    emptyPositions.push_back(i);
+                }
+            }
+            if (emptyPositions.size() == 0) {
+                clock.restart();
+                continue;
+            }
+            int randomPositionIndex = rand() % emptyPositions.size();
+            int randomPos = emptyPositions[randomPositionIndex];
+            Position randomPosition = energizerPos[randomPos];
+
+            pthread_mutex_lock(&enrgizerMutex);
+            if (energizersProduced != 4) {
+                energizersProduced++;
+                maze[randomPosition.x][randomPosition.y] = Tile::Energizer;
+            }
+            pthread_mutex_unlock(&enrgizerMutex);    
+            clock.restart();
+        }
+    }
+
+    return NULL;
+}
+
 int main() {
     srand(time(NULL));
     // Initialize mutex
-    pthread_mutex_init(&mutex, NULL);
-    pthread_mutex_init(&mutex1, NULL);
+    pthread_mutex_init(&mutexPacmanPos, NULL);
+    pthread_mutex_init(&ghostRead, NULL);
+    pthread_mutex_init(&mutexScoreLives, NULL);
+    pthread_mutex_init(&gridLock, NULL);
+    pthread_mutex_init(&enrgizerMutex, NULL);
+    pthread_mutex_init(&keyPermitMutex, NULL);
+    pthread_mutex_init(&speedBoostMutex, NULL);
 
-    // Create window
+
+    for (int i = 0; i < 4; i++) {
+        pthread_mutex_init(&ghostVars[i], NULL);
+    }
+
+
     sf::RenderWindow window(sf::VideoMode(TILE_SIZE * MAZE_WIDTH * SCREEN_RESIZE, (FONT_HEIGHT + TILE_SIZE * MAZE_HEIGHT) * SCREEN_RESIZE), "Pac-Man", sf::Style::Close);
-	//Resizing the window.
 	window.setView(sf::View(sf::FloatRect(0, 0, TILE_SIZE * MAZE_WIDTH, FONT_HEIGHT + TILE_SIZE * MAZE_HEIGHT)));
 
-    // Set thread attributes to create detached threads
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 
+    pthread_t keyCardProducerID;
+    pthread_create(&keyCardProducerID, &attr, produceKeyPermit, NULL);
+
     // Create user interface thread
     pthread_t userInterfaceThreadID;
     pthread_create(&userInterfaceThreadID, &attr, userInterfaceThread, NULL);
+    
+    pthread_t energizerProducerID;
+    pthread_create(&energizerProducerID, &attr, produceEnergizer, NULL);
+
+    pthread_t speedBoostProducerID;
+    pthread_create(&speedBoostProducerID, &attr, produceSpeedBoost, NULL);
+
 
     pthread_t ghostThreads[4];
     // Create ghost controller threads
@@ -1202,36 +1607,52 @@ int main() {
             }
 
             if (pacman.getDeadState() && pacman.getAnimationOver()) {
+                if (pacman.getLives() == 0) {
+                    window.close();
+                }
                 maze = getMaze(mazeMapping, ghostManager.ghosts, pacman);
                 pacman.reset();
                 ghostManager.reset();
             }
 
             if (FRAME > delay) {
-                // Rendering
                 window.clear(sf::Color::Black);
 
                 if (!pacman.getDeadState()) {
                     drawMap(maze, window);
+
+                    pthread_mutex_lock(&keyPermitMutex);
+                    keys[0].draw(window); permits[0].draw(window);
+                    keys[1].draw(window); permits[1].draw(window);
+                    pthread_mutex_unlock(&keyPermitMutex);
+
+                    pthread_mutex_lock(&speedBoostMutex);
+                    speedBoosts[0].draw(window); speedBoosts[1].draw(window);
+                    pthread_mutex_unlock(&speedBoostMutex);
+
                     ghostManager.draw(window);
                     draw_text(0, TILE_SIZE * MAZE_HEIGHT, "Score: " + std::to_string(pacman.getScore()), window);
                     draw_text(TILE_SIZE * MAZE_WIDTH - 200, TILE_SIZE * MAZE_HEIGHT, "Lives: ", window);
                 }
 
                 pacman.draw(window);
-
-                // Render game objects
-                // Render UI
                 window.display();
             }
         }
     }
 
-    // Joining detached threads is unnecessary and will be ignored
+    pthread_mutex_destroy(&mutexPacmanPos);
+    pthread_mutex_destroy(&ghostRead);
+    pthread_mutex_destroy(&mutexScoreLives);
+    pthread_mutex_destroy(&gridLock);
+    pthread_mutex_destroy(&enrgizerMutex);
+    pthread_mutex_destroy(&keyPermitMutex);
+    pthread_mutex_destroy(&speedBoostMutex);
 
-    // Destroy mutex
-    pthread_mutex_destroy(&mutex);
-    pthread_mutex_destroy(&mutex1);
+    for (int i = 0; i < 4; i++) {
+        pthread_mutex_destroy(&ghostVars[i]);
+    }
 
     return 0;
 }
+
