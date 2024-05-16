@@ -94,7 +94,7 @@ std::array<std::string, MAZE_HEIGHT> mazeMapping = {
     "#####.#    2  #.#####",
     "    #.# 3     #.#    ",
     " ####.#########.#### ",
-    " #........#........# ",
+    " #.................# ",
     " #.##.###.#.###.##.# ",
     " #o.#.....P.....#.o# ",
     " ##.#.#.#####.#.#.## ",
@@ -874,7 +874,6 @@ public:
         pthread_mutex_unlock(&ghostRead);
 
 
-
         //activating frightened-mode
         if (0 == frightened_mode && i_pacman.get_energizer_timer() == ENERGIZER_DURATION)
         {
@@ -885,7 +884,6 @@ public:
         {
             frightened_mode = 0;
         }
-        
         // end read
         pthread_mutex_lock(&ghostRead);
         ghostReaders--;
